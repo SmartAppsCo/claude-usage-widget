@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::cookies::{self, BrowserKind, CookieJar};
+use crate::cookies::CookieJar;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct UsageBucket {
@@ -13,33 +13,48 @@ pub struct UsageBucket {
 pub type UsageResponse = HashMap<String, UsageBucket>;
 type RawUsageResponse = HashMap<String, Option<UsageBucket>>;
 
-pub fn fetch_usage(
-    browser: BrowserKind,
-    data_dir: Option<&str>,
-) -> Result<UsageResponse, String> {
-    let cookies = cookies::read_cookies(browser, "claude.ai", data_dir)
-        .map_err(|e| format!("Cookie error: {e}"))?;
-    fetch_with_cookies(&cookies)
-}
+const USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0";
 
-pub fn fetch_account_name(
-    browser: BrowserKind,
-    data_dir: Option<&str>,
-) -> Result<String, String> {
-    let cookies = cookies::read_cookies(browser, "claude.ai", data_dir)
-        .map_err(|e| format!("Cookie error: {e}"))?;
-    let cookie_header: String = cookies
+fn cookie_header(cookies: &CookieJar) -> String {
+    cookies
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
-        .join("; ");
+        .join("; ")
+}
 
+pub fn fetch_with_cookies(cookies: &CookieJar) -> Result<UsageResponse, String> {
+    if !cookies.contains_key("sessionKey") {
+        return Err("No claude.ai session found".into());
+    }
+    let org_id = cookies
+        .get("lastActiveOrg")
+        .ok_or("No organization ID in cookies")?;
+
+    let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
+    let response = ureq::get(&url)
+        .header("Cookie", &cookie_header(cookies))
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "*/*")
+        .header("Referer", "https://claude.ai/settings/usage")
+        .call()
+        .map_err(|e| format!("HTTP error: {e}"))?;
+
+    let body = response
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("Read error: {e}"))?;
+
+    let raw: RawUsageResponse =
+        serde_json::from_str(&body).map_err(|e| format!("JSON parse error: {e}"))?;
+    Ok(raw.into_iter().filter_map(|(k, v)| v.map(|b| (k, b))).collect())
+}
+
+pub fn fetch_account_name(cookies: &CookieJar) -> Result<String, String> {
     let response = ureq::get("https://claude.ai/api/account")
-        .header("Cookie", &cookie_header)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0",
-        )
+        .header("Cookie", &cookie_header(cookies))
+        .header("User-Agent", USER_AGENT)
         .header("Accept", "*/*")
         .header("Referer", "https://claude.ai/settings/general")
         .call()
@@ -63,40 +78,4 @@ pub fn fetch_account_name(
         .filter(|s| !s.is_empty())
         .or(account.full_name.filter(|s| !s.is_empty()))
         .ok_or_else(|| "No name in account response".into())
-}
-
-pub fn fetch_with_cookies(cookies: &CookieJar) -> Result<UsageResponse, String> {
-    if !cookies.contains_key("sessionKey") {
-        return Err("No claude.ai session found".into());
-    }
-    let org_id = cookies
-        .get("lastActiveOrg")
-        .ok_or("No organization ID in cookies")?;
-
-    let url = format!("https://claude.ai/api/organizations/{org_id}/usage");
-    let cookie_header: String = cookies
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-
-    let response = ureq::get(&url)
-        .header("Cookie", &cookie_header)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0",
-        )
-        .header("Accept", "*/*")
-        .header("Referer", "https://claude.ai/settings/usage")
-        .call()
-        .map_err(|e| format!("HTTP error: {e}"))?;
-
-    let body = response
-        .into_body()
-        .read_to_string()
-        .map_err(|e| format!("Read error: {e}"))?;
-
-    let raw: RawUsageResponse =
-        serde_json::from_str(&body).map_err(|e| format!("JSON parse error: {e}"))?;
-    Ok(raw.into_iter().filter_map(|(k, v)| v.map(|b| (k, b))).collect())
 }

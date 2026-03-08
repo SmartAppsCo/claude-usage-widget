@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use crate::api::{self, UsageResponse};
-use crate::cookies::BrowserKind;
+use crate::cookies::{self, BrowserKind};
 
 const BG: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xf5, 0xf0);
 const FG: egui::Color32 = egui::Color32::from_rgb(0x1a, 0x1a, 0x1a);
@@ -21,6 +21,7 @@ const TICK: Duration = Duration::from_secs(30);
 const DEFAULT_REFRESH_SECS: u64 = 300;
 const IDLE_THRESHOLD_SECS: u64 = 60;
 const PADDING: f32 = 10.0;
+const MIN_HEIGHT: f32 = 274.0;
 
 const REFRESH_OPTIONS: &[(u64, &str)] = &[
     (60, "1 min"),
@@ -107,6 +108,7 @@ pub struct UsageApp {
     wm_name: String,
     always_on_top: bool,
     all_workspaces: bool,
+    last_height: f32,
 }
 
 impl UsageApp {
@@ -137,6 +139,7 @@ impl UsageApp {
             wm_name,
             always_on_top: true,
             all_workspaces: true,
+            last_height: 0.0,
         }
     }
 
@@ -156,11 +159,18 @@ impl UsageApp {
         let data_dir = self.data_dir.clone();
         let need_name = !self.title_explicit && self.shared.lock().unwrap().account_name.is_none();
         std::thread::spawn(move || {
-            let result = api::fetch_usage(browser, data_dir.as_deref());
-            let name = if need_name {
-                api::fetch_account_name(browser, data_dir.as_deref()).ok()
-            } else {
-                None
+            let jar = cookies::read_cookies(browser, "claude.ai", data_dir.as_deref());
+            let (result, name) = match jar {
+                Ok(cookies) => {
+                    let result = api::fetch_with_cookies(&cookies);
+                    let name = if need_name {
+                        api::fetch_account_name(&cookies).ok()
+                    } else {
+                        None
+                    };
+                    (result, name)
+                }
+                Err(e) => (Err(format!("Cookie error: {e}")), None),
             };
             let mut s = shared.lock().unwrap();
             s.data = Some(result);
@@ -208,14 +218,12 @@ impl UsageApp {
 
 impl eframe::App for UsageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.style_mut(|s| {
-            s.interaction.selectable_labels = false;
-            s.visuals.panel_fill = BG;
-        });
-
-        // Re-assert always-on-top once the window is mapped.
         if self.first_frame {
             self.first_frame = false;
+            ctx.style_mut(|s| {
+                s.interaction.selectable_labels = false;
+                s.visuals.panel_fill = BG;
+            });
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
         }
 
@@ -391,9 +399,7 @@ impl eframe::App for UsageApp {
                     // Usage display
                     match &self.cached_data {
                         None => {
-                            ui.label(
-                                egui::RichText::new("Updating...").color(DIM).size(12.0),
-                            );
+                            Self::render_loading(ui, ctx);
                         }
                         Some(Err(e)) => {
                             ui.label(
@@ -403,7 +409,6 @@ impl eframe::App for UsageApp {
                             );
                         }
                         Some(Ok(data)) => {
-                            let data = data.clone();
                             // Five-hour (current session)
                             if let Some(bucket) = data.get("five_hour") {
                                 Self::render_section(ui, "Current session", bucket.utilization.unwrap_or(0.0), bucket.resets_at.as_deref());
@@ -430,27 +435,81 @@ impl eframe::App for UsageApp {
                         }
                     }
 
-                    // Footer
-                    ui.add_space(2.0);
-                    let footer_text = match self.last_fetch {
-                        Some(t) => updated_ago(t),
-                        None => "Updating...".into(),
-                    };
-                    ui.label(
-                        egui::RichText::new(footer_text)
-                            .color(FOOTER_DIM)
-                            .size(10.0),
-                    );
+                    // Footer (only when we have fetched at least once)
+                    if let Some(t) = self.last_fetch {
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(updated_ago(t))
+                                .color(FOOTER_DIM)
+                                .size(10.0),
+                        );
+                    }
                 });
 
-                // Resize window height to fit content
-                let used_h = content.response.rect.height() + PADDING * 2.0;
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(186.0, used_h)));
+                // Resize window height to fit content (with minimum to avoid jump on load)
+                let used_h = (content.response.rect.height() + PADDING * 2.0).max(MIN_HEIGHT);
+                if (used_h - self.last_height).abs() > 0.5 {
+                    self.last_height = used_h;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(186.0, used_h)));
+                }
             });
     }
 }
 
 impl UsageApp {
+    fn render_loading(ui: &mut egui::Ui, ctx: &egui::Context) {
+        const PHRASES: &[&str] = &[
+            "Warming up...",
+            "Opening cookie jar...",
+            "Counting tokens...",
+            "Harmonizing...",
+            "Consulting the oracle...",
+            "Crunching numbers...",
+            "Reticulating splines...",
+            "Almost there...",
+        ];
+
+        let time = ctx.input(|i| i.time);
+        let colors = [BAR_BLUE, BAR_YELLOW, BAR_RED];
+
+        // Center the bars + phrase vertically
+        let bar_block_h = colors.len() as f32 * (BAR_H + 12.0) + 24.0;
+        let available = ui.available_height();
+        ui.add_space(((available - bar_block_h) / 2.0).max(0.0));
+
+        for (i, &color) in colors.iter().enumerate() {
+            ui.add_space(6.0);
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(BAR_W, BAR_H),
+                egui::Sense::hover(),
+            );
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 2.0, BAR_BG);
+
+            // Staggered sine wave — each bar fills and empties smoothly, offset in phase
+            let phase = time / 2.0 - i as f64 * 0.2;
+            let t = (phase.fract() + 1.0).fract();
+            let fill = (t * std::f64::consts::PI).sin() as f32;
+
+            if fill > 0.01 {
+                let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(BAR_W * fill, BAR_H));
+                painter.rect_filled(fill_rect, 2.0, color);
+            }
+            ui.add_space(6.0);
+        }
+
+        // Cycling phrase
+        let idx = (time / 2.5) as usize % PHRASES.len();
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(PHRASES[idx])
+                .color(DIM)
+                .size(11.0),
+        );
+
+        ctx.request_repaint_after(Duration::from_millis(30));
+    }
+
     fn render_section(ui: &mut egui::Ui, label: &str, utilization: f64, resets_at: Option<&str>) {
         let pct = utilization.round().min(100.0);
         let color = bar_color(pct);

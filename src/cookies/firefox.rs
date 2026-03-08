@@ -1,30 +1,10 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusqlite::Connection;
-use tempfile::TempDir;
 
 use crate::cookies::platform::firefox_default_dir;
 use crate::cookies::{CookieError, CookieJar};
-
-fn copy_db(db_path: &Path) -> Result<(TempDir, PathBuf), CookieError> {
-    let tmp = TempDir::new().map_err(CookieError::Io)?;
-    let name = db_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let tmp_db = tmp.path().join(&name);
-    fs::copy(db_path, &tmp_db).map_err(CookieError::Io)?;
-    for ext in ["-wal", "-shm"] {
-        let src = db_path.with_file_name(format!("{name}{ext}"));
-        if src.exists() {
-            let dst = tmp.path().join(format!("{name}{ext}"));
-            let _ = fs::copy(&src, &dst);
-        }
-    }
-    Ok((tmp, tmp_db))
-}
 
 pub fn read(domain: &str, data_dir: Option<&str>) -> Result<CookieJar, CookieError> {
     let ff_dir = match data_dir {
@@ -65,7 +45,7 @@ pub fn read(domain: &str, data_dir: Option<&str>) -> Result<CookieJar, CookieErr
     });
     let db_path = dbs.last().unwrap();
 
-    let (_tmp, tmp_db) = copy_db(db_path)?;
+    let (_tmp, tmp_db) = super::copy_db(db_path)?;
     let conn = Connection::open(&tmp_db).map_err(CookieError::Sqlite)?;
     let mut stmt = conn
         .prepare("SELECT name, value FROM moz_cookies WHERE host LIKE ?1")

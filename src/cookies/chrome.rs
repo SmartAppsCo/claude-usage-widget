@@ -1,30 +1,10 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusqlite::Connection;
-use tempfile::TempDir;
 
-use crate::cookies::platform::decrypt_chrome_value;
+use crate::cookies::platform::{chrome_encryption_key, decrypt_chrome_value};
 use crate::cookies::{CookieError, CookieJar};
-
-fn copy_db(db_path: &Path) -> Result<(TempDir, PathBuf), CookieError> {
-    let tmp = TempDir::new().map_err(CookieError::Io)?;
-    let name = db_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let tmp_db = tmp.path().join(&name);
-    fs::copy(db_path, &tmp_db).map_err(CookieError::Io)?;
-    for ext in ["-wal", "-shm"] {
-        let src = db_path.with_file_name(format!("{name}{ext}"));
-        if src.exists() {
-            let dst = tmp.path().join(format!("{name}{ext}"));
-            let _ = fs::copy(&src, &dst);
-        }
-    }
-    Ok((tmp, tmp_db))
-}
 
 pub fn read(domain: &str, data_dir: Option<&str>, default_dirs: fn() -> Vec<PathBuf>) -> Result<CookieJar, CookieError> {
     let base_dirs: Vec<PathBuf> = match data_dir {
@@ -67,7 +47,10 @@ pub fn read(domain: &str, data_dir: Option<&str>, default_dirs: fn() -> Vec<Path
     });
     let db_path = candidates.last().unwrap();
 
-    let (_tmp, tmp_db) = copy_db(db_path)?;
+    // Read the encryption key once (only needed on Windows; returns None elsewhere).
+    let key = chrome_encryption_key(db_path);
+
+    let (_tmp, tmp_db) = super::copy_db(db_path)?;
     let conn = Connection::open(&tmp_db).map_err(CookieError::Sqlite)?;
     let mut stmt = conn
         .prepare("SELECT name, encrypted_value FROM cookies WHERE host_key LIKE ?1")
@@ -82,7 +65,7 @@ pub fn read(domain: &str, data_dir: Option<&str>, default_dirs: fn() -> Vec<Path
     let mut jar = CookieJar::new();
     for row in rows {
         let (name, encrypted) = row.map_err(CookieError::Sqlite)?;
-        match decrypt_chrome_value(&encrypted) {
+        match decrypt_chrome_value(&encrypted, key.as_deref()) {
             Ok(val) if !val.is_empty() => {
                 jar.insert(name, val);
             }

@@ -4,8 +4,28 @@ pub mod platform;
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::{Path, PathBuf};
+
+use tempfile::TempDir;
 
 pub type CookieJar = HashMap<String, String>;
+
+pub(crate) fn copy_db(db_path: &Path) -> Result<(TempDir, PathBuf), CookieError> {
+    let name = db_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let tmp = TempDir::new().map_err(CookieError::Io)?;
+    let tmp_db = tmp.path().join(&name);
+    std::fs::copy(db_path, &tmp_db).map_err(CookieError::Io)?;
+    for ext in ["-wal", "-shm"] {
+        let src = db_path.with_file_name(format!("{name}{ext}"));
+        let dst = tmp.path().join(format!("{name}{ext}"));
+        let _ = std::fs::copy(&src, &dst);
+    }
+    Ok((tmp, tmp_db))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrowserKind {

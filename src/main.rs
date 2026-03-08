@@ -122,34 +122,24 @@ fn try_set_x11_states(wm_name: &str) -> Option<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "linux")]
-fn desktop_file_path() -> std::path::PathBuf {
-    let data_dir = std::env::var("XDG_DATA_HOME")
+fn xdg_data_dir() -> std::path::PathBuf {
+    std::env::var("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
-            let mut p = dirs_home();
-            p.push(".local/share");
-            p
-        });
-    data_dir.join("applications/claude-usage.desktop")
+            cookies::platform::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join(".local/share")
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_file_path() -> std::path::PathBuf {
+    xdg_data_dir().join("applications/claude-usage.desktop")
 }
 
 #[cfg(target_os = "linux")]
 fn icon_install_path() -> std::path::PathBuf {
-    let data_dir = std::env::var("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            let mut p = dirs_home();
-            p.push(".local/share");
-            p
-        });
-    data_dir.join("icons/hicolor/256x256/apps/claude-usage.png")
-}
-
-#[cfg(target_os = "linux")]
-fn dirs_home() -> std::path::PathBuf {
-    std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+    xdg_data_dir().join("icons/hicolor/256x256/apps/claude-usage.png")
 }
 
 #[cfg(target_os = "linux")]
@@ -357,7 +347,7 @@ fn main() {
 
     let viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
-        .with_inner_size([186.0, 290.0])
+        .with_inner_size([186.0, 274.0])
         .with_always_on_top()
         .with_icon(icon);
 
