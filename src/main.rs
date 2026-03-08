@@ -42,7 +42,7 @@ fn prefer_xwayland() -> bool {
 }
 
 /// Spawn a background thread that waits for our X11 window to appear, then
-/// sets EWMH states (sticky, skip-taskbar, always-on-top).
+/// sets EWMH states (sticky, always-on-top).
 #[cfg(target_os = "linux")]
 fn set_x11_states(wm_name: String) {
     std::thread::spawn(move || {
@@ -72,7 +72,6 @@ fn try_set_x11_states(wm_name: &str) -> Option<()> {
     let utf8_string = intern(b"UTF8_STRING")?;
     let net_wm_state = intern(b"_NET_WM_STATE")?;
     let state_sticky = intern(b"_NET_WM_STATE_STICKY")?;
-    let state_skip_taskbar = intern(b"_NET_WM_STATE_SKIP_TASKBAR")?;
     let state_above = intern(b"_NET_WM_STATE_ABOVE")?;
 
     let reply = conn
@@ -95,7 +94,7 @@ fn try_set_x11_states(wm_name: &str) -> Option<()> {
     }
     let window = window?;
 
-    for &state in &[state_sticky, state_skip_taskbar, state_above] {
+    for &state in &[state_sticky, state_above] {
         let event = ClientMessageEvent {
             response_type: CLIENT_MESSAGE_EVENT,
             format: 32,
@@ -117,6 +116,95 @@ fn try_set_x11_states(wm_name: &str) -> Option<()> {
     Some(())
 }
 
+// ---------------------------------------------------------------------------
+// Desktop integration: auto-install .desktop file and icon on Linux so GNOME
+// (and other freedesktop-compliant DEs) show the app icon in the dash/taskbar.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+fn desktop_file_path() -> std::path::PathBuf {
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let mut p = dirs_home();
+            p.push(".local/share");
+            p
+        });
+    data_dir.join("applications/claude-usage.desktop")
+}
+
+#[cfg(target_os = "linux")]
+fn icon_install_path() -> std::path::PathBuf {
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let mut p = dirs_home();
+            p.push(".local/share");
+            p
+        });
+    data_dir.join("icons/hicolor/256x256/apps/claude-usage.png")
+}
+
+#[cfg(target_os = "linux")]
+fn dirs_home() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+}
+
+#[cfg(target_os = "linux")]
+fn install_desktop_entry() {
+    let desktop_path = desktop_file_path();
+    let icon_path = icon_install_path();
+
+    if desktop_path.exists() && icon_path.exists() {
+        return;
+    }
+
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "claude-usage".into());
+
+    let desktop_content = format!("[Desktop Entry]
+Type=Application
+Name=Claude Usage
+Comment=Desktop widget showing Claude usage stats
+Exec={exe}
+Icon=claude-usage
+Terminal=false
+StartupWMClass=claude-usage
+StartupNotify=false
+Categories=Utility;
+");
+
+    if let Some(parent) = desktop_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&desktop_path, desktop_content);
+
+    if let Some(parent) = icon_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&icon_path, include_bytes!("../images/icon.png"));
+
+    // Refresh caches so the DE picks up the new icon immediately.
+    let _ = std::process::Command::new("gtk-update-icon-cache")
+        .args(["-f", "-t"])
+        .arg(icon_path.parent().unwrap().parent().unwrap().parent().unwrap())
+        .output();
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(desktop_path.parent().unwrap())
+        .output();
+}
+
+#[cfg(target_os = "linux")]
+fn uninstall_desktop_entry() {
+    let _ = std::fs::remove_file(desktop_file_path());
+    let _ = std::fs::remove_file(icon_install_path());
+    eprintln!("Desktop entry and icon removed.");
+}
+
 fn print_usage() {
     eprintln!("Usage: claude-usage [OPTIONS]");
     eprintln!();
@@ -124,6 +212,7 @@ fn print_usage() {
     eprintln!("  --browser <firefox|chrome|brave>  Browser to read cookies from");
     eprintln!("  --data-dir <PATH>           Browser data directory");
     eprintln!("  --title <NAME>              Widget title (default: Plan Usage)");
+    eprintln!("  --uninstall                 Remove desktop entry and icon");
     eprintln!("  --help                      Show this help");
 }
 
@@ -142,6 +231,13 @@ fn main() {
         match args[i].as_str() {
             "--help" | "-h" => {
                 print_usage();
+                std::process::exit(0);
+            }
+            "--uninstall" => {
+                #[cfg(target_os = "linux")]
+                uninstall_desktop_entry();
+                #[cfg(not(target_os = "linux"))]
+                eprintln!("--uninstall is only supported on Linux");
                 std::process::exit(0);
             }
             "--browser" => {
@@ -190,6 +286,10 @@ fn main() {
         eprintln!("Error: --data-dir requires --browser");
         std::process::exit(1);
     }
+
+    // Auto-install .desktop file and icon on Linux (idempotent).
+    #[cfg(target_os = "linux")]
+    install_desktop_entry();
 
     let (browser, picker_options) = if let Some(b) = browser {
         let cookies = cookies::read_cookies(b, "claude.ai", data_dir.as_deref());
@@ -252,10 +352,14 @@ fn main() {
 
     use eframe::egui;
 
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../images/icon.png"))
+        .expect("Failed to load icon");
+
     let viewport = egui::ViewportBuilder::default()
         .with_decorations(false)
         .with_inner_size([186.0, 290.0])
-        .with_always_on_top();
+        .with_always_on_top()
+        .with_icon(icon);
 
     let options = eframe::NativeOptions {
         viewport,

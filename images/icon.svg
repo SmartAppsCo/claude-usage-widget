@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="40" fill="#F5F5F0"/>
+
+  <!-- Top bar - blue 20% -->
+  <rect x="40" y="60" width="176" height="28" rx="6" fill="#D9D9D9"/>
+  <rect x="40" y="60" width="35" height="28" rx="6" fill="#4A90D9"/>
+
+  <!-- Middle bar - yellow 50% -->
+  <rect x="40" y="114" width="176" height="28" rx="6" fill="#D9D9D9"/>
+  <rect x="40" y="114" width="88" height="28" rx="6" fill="#D4A017"/>
+
+  <!-- Bottom bar - red 80% -->
+  <rect x="40" y="168" width="176" height="28" rx="6" fill="#D9D9D9"/>
+  <rect x="40" y="168" width="141" height="28" rx="6" fill="#DC4545"/>
+</svg>

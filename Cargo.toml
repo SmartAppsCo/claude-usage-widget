@@ -29,6 +29,9 @@ security-framework = "3"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = ["Win32_Security_Cryptography"] }
 
+[build-dependencies]
+winresource = "0.1"
+
 [profile.release]
 opt-level = "z"
 lto = true
