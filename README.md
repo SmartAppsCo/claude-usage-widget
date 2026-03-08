@@ -18,7 +18,7 @@ The widget reads your session cookie to fetch usage data — no API key needed.
 ## Install
 
 ```
-cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.1.0
+cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.1.1
 ```
 
 This places the `claude-usage` binary in `~/.cargo/bin/` (make sure it's in your `PATH`).
