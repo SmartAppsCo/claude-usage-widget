@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.2.0] - 2026-03-09
+
+### Added
+
+- Windows support: Chrome/Brave cookie decryption via DPAPI + AES-256-GCM
+- Animated loading screen with colored progress bars and cycling status phrases
+- Minimum window height to prevent resize jump on initial load
+
+### Changed
+
+- Cookies read once per fetch cycle instead of twice (performance)
+- Keyring password cached to avoid repeated subprocess spawns on Linux
+- Deduplicated shared code across cookie modules
+
+
 ## [0.1.1] - 2026-03-09
 
 ### Added
