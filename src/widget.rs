@@ -407,6 +407,7 @@ impl eframe::App for UsageApp {
                                     BrowserKind::Firefox => "Firefox",
                                     BrowserKind::Chrome => "Chrome",
                                     BrowserKind::Brave => "Brave",
+                                    BrowserKind::Edge => "Edge",
                                 };
                                 if ui.button(label).clicked() {
                                     self.browser = Some(b);

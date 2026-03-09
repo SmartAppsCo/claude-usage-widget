@@ -148,14 +148,19 @@ fn install_desktop_entry() {
     let desktop_path = desktop_file_path();
     let icon_path = icon_install_path();
 
-    if desktop_path.exists() && icon_path.exists() {
-        return;
-    }
-
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| "claude-usage".into());
+
+    // Skip if already installed and Exec= still points to the current binary.
+    if desktop_path.exists() && icon_path.exists() {
+        if let Ok(contents) = std::fs::read_to_string(&desktop_path) {
+            if contents.contains(&format!("Exec={exe}")) {
+                return;
+            }
+        }
+    }
 
     let desktop_content = format!("[Desktop Entry]
 Type=Application
@@ -196,11 +201,26 @@ fn uninstall_desktop_entry() {
     eprintln!("Desktop entry and icon removed.");
 }
 
+fn fatal_error(msg: &str) -> ! {
+    eprintln!("{msg}");
+    #[cfg(target_os = "windows")]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+        let caption: Vec<u16> = "Claude Usage\0".encode_utf16().collect();
+        unsafe {
+            MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(caption.as_ptr()), MB_OK | MB_ICONERROR);
+        }
+    }
+    std::process::exit(1);
+}
+
 fn print_usage() {
     eprintln!("Usage: claude-usage [OPTIONS]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --browser <firefox|chrome|brave>  Browser to read cookies from");
+    eprintln!("  --browser <firefox|chrome|brave|edge>  Browser to read cookies from");
     eprintln!("  --data-dir <PATH>           Browser data directory");
     eprintln!("  --title <NAME>              Widget title (default: Plan Usage)");
     eprintln!("  --uninstall                 Remove desktop entry and icon");
@@ -210,8 +230,7 @@ fn print_usage() {
 fn detect_browsers_or_exit() -> (Option<BrowserKind>, Option<Vec<BrowserKind>>) {
     let found = cookies::detect_browsers("claude.ai");
     if found.is_empty() {
-        eprintln!("No claude.ai session found in Firefox, Chrome, or Brave.");
-        std::process::exit(1);
+        fatal_error("No claude.ai session found in any supported browser.");
     }
     if found.len() == 1 {
         let b = *found.keys().next().unwrap();
@@ -222,6 +241,7 @@ fn detect_browsers_or_exit() -> (Option<BrowserKind>, Option<Vec<BrowserKind>>) 
             BrowserKind::Firefox => 0,
             BrowserKind::Chrome => 1,
             BrowserKind::Brave => 2,
+            BrowserKind::Edge => 3,
         });
         (None, Some(browsers))
     }
@@ -254,48 +274,42 @@ fn main() {
             "--browser" => {
                 i += 1;
                 if i >= args.len() {
-                    eprintln!("Error: --browser requires a value");
-                    std::process::exit(1);
+                    fatal_error("Error: --browser requires a value");
                 }
                 browser = Some(match args[i].as_str() {
                     "firefox" => BrowserKind::Firefox,
                     "chrome" => BrowserKind::Chrome,
                     "brave" => BrowserKind::Brave,
+                    "edge" => BrowserKind::Edge,
                     other => {
-                        eprintln!("Error: unknown browser '{other}' (use firefox, chrome, or brave)");
-                        std::process::exit(1);
+                        fatal_error(&format!("Error: unknown browser '{other}' (use firefox, chrome, brave, or edge)"));
                     }
                 });
             }
             "--data-dir" => {
                 i += 1;
                 if i >= args.len() {
-                    eprintln!("Error: --data-dir requires a value");
-                    std::process::exit(1);
+                    fatal_error("Error: --data-dir requires a value");
                 }
                 data_dir = Some(args[i].clone());
             }
             "--title" => {
                 i += 1;
                 if i >= args.len() {
-                    eprintln!("Error: --title requires a value");
-                    std::process::exit(1);
+                    fatal_error("Error: --title requires a value");
                 }
                 title = args[i].clone();
                 title_explicit = true;
             }
             other => {
-                eprintln!("Error: unknown argument '{other}'");
-                print_usage();
-                std::process::exit(1);
+                fatal_error(&format!("Error: unknown argument '{other}'"));
             }
         }
         i += 1;
     }
 
     if data_dir.is_some() && browser.is_none() {
-        eprintln!("Error: --data-dir requires --browser");
-        std::process::exit(1);
+        fatal_error("Error: --data-dir requires --browser");
     }
 
     let config = config::Config::load();
@@ -310,12 +324,10 @@ fn main() {
         match cookies {
             Ok(ref c) if c.contains_key("sessionKey") => {}
             Ok(_) => {
-                eprintln!("No claude.ai session found in {b}.");
-                std::process::exit(1);
+                fatal_error(&format!("No claude.ai session found in {b}."));
             }
             Err(e) => {
-                eprintln!("Error reading {b} cookies: {e}");
-                std::process::exit(1);
+                fatal_error(&format!("Error reading {b} cookies: {e}"));
             }
         }
         (Some(b), None)

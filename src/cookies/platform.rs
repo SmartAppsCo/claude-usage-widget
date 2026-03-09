@@ -127,7 +127,50 @@ pub fn brave_default_dirs() -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Chrome/Brave encryption key (needed on Windows for AES-256-GCM)
+// Edge default directories
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+pub fn edge_default_dirs() -> Vec<PathBuf> {
+    let Some(home) = home_dir() else {
+        return vec![];
+    };
+    let p = home.join(".config/microsoft-edge");
+    if p.is_dir() {
+        vec![p]
+    } else {
+        vec![]
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn edge_default_dirs() -> Vec<PathBuf> {
+    let Some(home) = home_dir() else {
+        return vec![];
+    };
+    let p = home.join("Library/Application Support/Microsoft Edge");
+    if p.is_dir() {
+        vec![p]
+    } else {
+        vec![]
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn edge_default_dirs() -> Vec<PathBuf> {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+        return vec![];
+    };
+    let p = PathBuf::from(local).join("Microsoft/Edge/User Data");
+    if p.is_dir() {
+        vec![p]
+    } else {
+        vec![]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chrome/Brave/Edge encryption key (needed on Windows for AES-256-GCM)
 // ---------------------------------------------------------------------------
 
 /// On Windows, reads the AES-256-GCM key from Chrome's `Local State` file
@@ -179,7 +222,9 @@ pub fn chrome_encryption_key(db_path: &std::path::Path) -> Option<Vec<u8>> {
         CryptUnprotectData(&input, None, None, None, None, 0, &mut output).ok()?;
         let key = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         // Free the DPAPI-allocated buffer (ignore errors on cleanup).
-        let _ = windows::Win32::Foundation::LocalFree(output.pbData as _);
+        let _ = windows::Win32::Foundation::LocalFree(Some(
+            windows::Win32::Foundation::HLOCAL(output.pbData as _),
+        ));
         Some(key)
     }
 }
@@ -279,9 +324,14 @@ pub fn decrypt_chrome_value(encrypted: &[u8], _key: Option<&[u8]>) -> Result<Str
 
     let ciphertext = &encrypted[3..];
 
-    let password = ["Chrome Safe Storage", "Brave Safe Storage", "Chromium Safe Storage"]
+    let password = [
+        ("Chrome Safe Storage", "Chrome"),
+        ("Brave Safe Storage", "Brave"),
+        ("Chromium Safe Storage", "Chromium"),
+        ("Microsoft Edge Safe Storage", "Microsoft Edge"),
+    ]
         .iter()
-        .find_map(|svc| get_generic_password(None, svc).ok())
+        .find_map(|(svc, acct)| get_generic_password(svc, acct).ok())
         .ok_or_else(|| CookieError::Decrypt("Keychain lookup failed for all browsers".into()))?;
     let mut key = [0u8; 16];
     pbkdf2_hmac::<Sha1>(&password, b"saltysalt", 1003, &mut key);

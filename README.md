@@ -10,7 +10,7 @@ Especially useful for heavy Claude Code users who burn through their allocation 
 
 ## Prerequisites
 
-- Logged into claude.ai in a supported browser (Chrome, Brave, or Firefox)
+- Logged into claude.ai in a supported browser (Chrome, Brave, Edge, or Firefox)
 
 The widget reads your session cookie to fetch usage data — no API key needed.
 
@@ -30,7 +30,7 @@ Extract the archive and place the `claude-usage` binary somewhere in your `PATH`
 Alternatively, build from source with [Cargo](https://rustup.rs/):
 
 ```
-cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.3.0
+cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.3.1
 ```
 
 On Linux, building from source requires these system packages:
@@ -42,7 +42,7 @@ sudo apt install libgtk-3-dev libxcb-screensaver0-dev
 ## Options
 
 ```
---browser <firefox|chrome|brave>   Browser to read cookies from (auto-detected if omitted)
+--browser <firefox|chrome|brave|edge>   Browser to read cookies from (auto-detected if omitted)
 --data-dir <PATH>                  Custom browser data directory (requires --browser)
 --title <NAME>                     Display name shown in the widget header
 ```

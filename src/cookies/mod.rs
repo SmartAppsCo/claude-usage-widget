@@ -32,6 +32,7 @@ pub enum BrowserKind {
     Firefox,
     Chrome,
     Brave,
+    Edge,
 }
 
 impl fmt::Display for BrowserKind {
@@ -40,6 +41,7 @@ impl fmt::Display for BrowserKind {
             BrowserKind::Firefox => write!(f, "firefox"),
             BrowserKind::Chrome => write!(f, "chrome"),
             BrowserKind::Brave => write!(f, "brave"),
+            BrowserKind::Edge => write!(f, "edge"),
         }
     }
 }
@@ -74,11 +76,12 @@ pub fn read_cookies(
         BrowserKind::Firefox => firefox::read(domain, data_dir),
         BrowserKind::Chrome => chrome::read(domain, data_dir, platform::chrome_default_dirs),
         BrowserKind::Brave => chrome::read(domain, data_dir, platform::brave_default_dirs),
+        BrowserKind::Edge => chrome::read(domain, data_dir, platform::edge_default_dirs),
     }
 }
 
 pub fn detect_browsers(domain: &str) -> HashMap<BrowserKind, CookieJar> {
-    let browsers = [BrowserKind::Firefox, BrowserKind::Chrome, BrowserKind::Brave];
+    let browsers = [BrowserKind::Firefox, BrowserKind::Chrome, BrowserKind::Brave, BrowserKind::Edge];
     let handles: Vec<_> = browsers
         .iter()
         .map(|&b| {

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.3.1] - 2026-03-09
+
+### Added
+
+- Pre-built binaries for Linux, macOS (Intel + Apple Silicon), and Windows attached to GitHub releases
+- Linux build-from-source dependencies documented in README
+
+
 ## [0.3.0] - 2026-03-09
 
 ### Added
