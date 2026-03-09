@@ -113,6 +113,7 @@ struct SharedState {
 pub struct UsageApp {
     browser: BrowserKind,
     data_dir: Option<String>,
+    oauth_dir: Option<String>,
     shared: Arc<Mutex<SharedState>>,
     cached_data: Option<Result<UsageResponse, String>>,
     cached_cookies: Option<cookies::CookieJar>,
@@ -134,6 +135,7 @@ impl UsageApp {
     pub fn new(
         browser: BrowserKind,
         data_dir: Option<String>,
+        oauth_dir: Option<String>,
         title: String,
         title_explicit: bool,
         wm_name: String,
@@ -146,6 +148,7 @@ impl UsageApp {
         Self {
             browser,
             data_dir,
+            oauth_dir,
             shared: Arc::new(Mutex::new(SharedState {
                 data: None,
                 fetching: false,
@@ -189,12 +192,12 @@ impl UsageApp {
         self.last_fetch_start = Some(Instant::now());
         let shared = Arc::clone(&self.shared);
         let data_dir = self.data_dir.clone();
+        let oauth_dir = self.oauth_dir.clone();
         let cached_cookies = self.cached_cookies.clone();
         let need_name = !self.title_explicit && self.shared.lock().unwrap().account_name.is_none();
         std::thread::spawn(move || {
-            // Try cached cookies first, fall back to re-reading from browser DB.
             let (result, name, fresh) = Self::fetch_with_fallback(
-                cached_cookies, browser, data_dir.as_deref(), need_name,
+                cached_cookies, browser, data_dir.as_deref(), oauth_dir.as_deref(), need_name,
             );
             let mut s = shared.lock().unwrap();
             s.data = Some(result);
@@ -206,15 +209,24 @@ impl UsageApp {
         });
     }
 
-    /// Try API with cached cookies. On failure, re-read from the browser DB
-    /// and retry once. Returns (api_result, account_name, new_cookies_if_reread).
+    /// Try OAuth first, then cached cookies, then re-read from the browser DB.
+    /// Returns (api_result, account_name, new_cookies_if_reread).
     fn fetch_with_fallback(
         cached: Option<cookies::CookieJar>,
         browser: BrowserKind,
         data_dir: Option<&str>,
+        oauth_dir: Option<&str>,
         need_name: bool,
     ) -> (Result<UsageResponse, String>, Option<String>, Option<cookies::CookieJar>) {
-        // Try cached cookies first.
+        // Try Claude Code OAuth credentials first (no permissions needed).
+        if let Some(token) = crate::oauth::read_access_token(oauth_dir) {
+            if let Ok((data, email)) = api::fetch_with_oauth(&token) {
+                let name = if need_name { email } else { None };
+                return (Ok(data), name, None);
+            }
+        }
+
+        // Try cached cookies.
         if let Some(ref jar) = cached {
             if let Ok(data) = api::fetch_with_cookies(jar) {
                 let name = if need_name { api::fetch_account_name(jar).ok() } else { None };

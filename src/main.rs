@@ -4,6 +4,7 @@ mod api;
 mod config;
 mod cookies;
 mod idle;
+mod oauth;
 mod widget;
 
 use cookies::BrowserKind;
@@ -250,6 +251,8 @@ fn print_usage() {
     eprintln!("  --browser <BROWSER>         Browser to read cookies from");
     eprintln!("                              (firefox, chrome, brave, edge, safari)");
     eprintln!("  --data-dir <PATH>           Browser data directory");
+    eprintln!("  --oauth-dir <PATH>          Claude Code credentials directory");
+    eprintln!("                              (default: ~/.claude)");
     eprintln!("  --title <NAME>              Widget title (default: Plan Usage)");
     eprintln!("  --uninstall                 Remove desktop entry and icon");
     eprintln!("  --help                      Show this help");
@@ -268,6 +271,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut browser: Option<BrowserKind> = None;
     let mut data_dir: Option<String> = None;
+    let mut oauth_dir: Option<String> = None;
     let mut title = String::from("Plan Usage");
     let mut title_explicit = false;
 
@@ -309,6 +313,13 @@ fn main() {
                 }
                 data_dir = Some(args[i].clone());
             }
+            "--oauth-dir" => {
+                i += 1;
+                if i >= args.len() {
+                    fatal_error("Error: --oauth-dir requires a value");
+                }
+                oauth_dir = Some(args[i].clone());
+            }
             "--title" => {
                 i += 1;
                 if i >= args.len() {
@@ -349,6 +360,7 @@ fn main() {
     });
 
     let has_cached_session = initial_cookies.as_ref().is_some_and(|c| c.contains_key("sessionKey"));
+    let has_oauth = oauth::read_access_token(oauth_dir.as_deref()).is_some();
 
     let browser = if let Some(b) = browser {
         // Explicit --browser: skip DB read if we have cached cookies (the
@@ -365,14 +377,20 @@ fn main() {
                 Ok(c) if c.contains_key("sessionKey") => {
                     initial_cookies = Some(c);
                 }
-                Ok(_) => fatal_error(&format!("No claude.ai session found in {b}.")),
-                Err(e) => fatal_error(&format!("Error reading {b} cookies: {e}")),
+                Ok(_) if !has_oauth => fatal_error(&format!("No claude.ai session found in {b}.")),
+                Err(e) if !has_oauth => fatal_error(&format!("Error reading {b} cookies: {e}")),
+                _ => {} // OAuth available as fallback
             }
         }
         b
     } else if has_cached_session {
         // Cached cookies available — use the browser they came from for fallback.
         cached_browser.unwrap_or_else(|| detect_browser_or_exit())
+    } else if has_oauth {
+        // OAuth credentials available — browser is only needed as a fallback.
+        cached_browser
+            .or_else(|| cookies::detect_browser("claude.ai"))
+            .unwrap_or(BrowserKind::Firefox)
     } else {
         detect_browser_or_exit()
     };
@@ -401,7 +419,7 @@ fn main() {
     // find exactly its own window when multiple instances are running.
     let wm_name = format!("Claude Usage {}", std::process::id());
 
-    let app = widget::UsageApp::new(browser, data_dir, title, title_explicit, wm_name.clone(), config, initial_cookies);
+    let app = widget::UsageApp::new(browser, data_dir, oauth_dir, title, title_explicit, wm_name.clone(), config, initial_cookies);
 
     use eframe::egui;
 

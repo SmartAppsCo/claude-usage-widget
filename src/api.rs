@@ -51,6 +51,55 @@ pub fn fetch_with_cookies(cookies: &CookieJar) -> Result<UsageResponse, String> 
     Ok(raw.into_iter().filter_map(|(k, v)| v.map(|b| (k, b))).collect())
 }
 
+/// Fetch usage via the Anthropic OAuth API (used by Claude Code).
+/// Returns usage data and an optional email for the account name.
+pub fn fetch_with_oauth(token: &str) -> Result<(UsageResponse, Option<String>), String> {
+    let response = ureq::get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .call()
+        .map_err(|e| format!("HTTP error: {e}"))?;
+
+    let body = response
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("Read error: {e}"))?;
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    let obj = raw.as_object().ok_or("Expected JSON object")?;
+    let mut usage = UsageResponse::new();
+    let mut email: Option<String> = None;
+
+    for (key, value) in obj {
+        if key == "email" {
+            email = value.as_str().map(String::from);
+            continue;
+        }
+        // Try to parse as a usage bucket; non-bucket fields (plan, extra_usage, etc.)
+        // will fail or produce empty buckets and get skipped.
+        if let Ok(bucket) = serde_json::from_value::<UsageBucket>(value.clone()) {
+            if let Some(u) = bucket.utilization {
+                // The API may return utilization as a fraction (0.0–1.0)
+                // or as a percentage (0–100). Normalize to percentage.
+                let u = if u > 1.0 { u } else { u * 100.0 };
+                usage.insert(
+                    key.clone(),
+                    UsageBucket { utilization: Some(u), resets_at: bucket.resets_at },
+                );
+            }
+        }
+    }
+
+    if usage.is_empty() {
+        return Err("No usage data in OAuth response".into());
+    }
+
+    Ok((usage, email))
+}
+
 pub fn fetch_account_name(cookies: &CookieJar) -> Result<String, String> {
     let response = ureq::get("https://claude.ai/api/account")
         .header("Cookie", &cookie_header(cookies))

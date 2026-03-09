@@ -10,9 +10,10 @@ Especially useful for heavy Claude Code users who burn through their allocation 
 
 ## Prerequisites
 
-- Logged into claude.ai in a supported browser (Firefox, Chrome, Brave, Edge, or Safari)
+- **Claude Code** users: works automatically — the widget reads your existing OAuth credentials from `~/.claude/.credentials.json` with no extra setup
+- **Browser-only** users: log into claude.ai in a supported browser (Firefox, Chrome, Brave, Edge, or Safari)
 
-The widget reads your session cookie to fetch usage data — no API key needed.
+The widget tries Claude Code OAuth credentials first, then falls back to reading browser session cookies. No API key needed.
 
 ## Platform Notes
 
@@ -45,7 +46,7 @@ Extract the archive. On macOS, double-click `Claude Usage.app` to run (or drag i
 Alternatively, build from source with [Cargo](https://rustup.rs/):
 
 ```
-cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.6.0
+cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.7.0
 ```
 
 On Linux, building from source requires these system packages:
@@ -60,10 +61,13 @@ sudo apt install libgtk-3-dev libxcb-screensaver0-dev
 --browser <BROWSER>                Browser to read cookies from (auto-detected if omitted)
                                    (firefox, chrome, brave, edge, safari*) (* macOS only)
 --data-dir <PATH>                  Custom browser data directory (requires --browser)
+--oauth-dir <PATH>                 Claude Code credentials directory (default: ~/.claude)
 --title <NAME>                     Display name shown in the widget header
 ```
 
 `--data-dir` is useful for non-standard browser installations or custom profiles where the cookie database isn't in the default location.
+
+`--oauth-dir` is useful if you have multiple Claude Code configurations (e.g. `~/.claude-work`).
 
 When `--title` is omitted, the widget fetches your name from the "What should Claude call you?" setting on your account. You can change this at https://claude.ai/settings/general. Passing `--title` skips that extra API call.
 
