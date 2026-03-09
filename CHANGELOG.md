@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.5.0] - 2026-03-09
+
+### Added
+
+- Safari browser support on macOS (reads `.binarycookies` format)
+- Native permission dialogs before macOS Keychain and Safari Full Disk Access prompts
+- macOS builds packaged as `.app` bundles (no more Terminal opening on double-click)
+- GUI error dialogs on all platforms (macOS via osascript, Linux via zenity/kdialog, Windows via MessageBox)
+- Windows explanation dialog before UAC elevation prompt
+
+### Changed
+
+- Cookie databases opened in SQLite immutable mode to avoid WAL/file lock conflicts
+- Browser detection is now sequential (Firefox first, then Chromium browsers, Safari last) instead of parallel
+- macOS Chromium keychain explanation only shown once per binary path (persisted in config)
+- `fork()` detach limited to Linux only (avoids ObjC runtime crash on macOS)
+
+### Fixed
+
+- SQLite "database is locked" error when Firefox holds WAL lock on macOS
+- Paths with spaces (e.g. `~/Library/Application Support/...`) failing SQLite URI parsing
+
+
 ## [0.4.0] - 2026-03-09
 
 ### Added

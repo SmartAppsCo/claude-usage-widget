@@ -45,7 +45,7 @@ Extract the archive. On macOS, double-click `Claude Usage.app` to run (or drag i
 Alternatively, build from source with [Cargo](https://rustup.rs/):
 
 ```
-cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.4.0
+cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.5.0
 ```
 
 On Linux, building from source requires these system packages:
