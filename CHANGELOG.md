@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.7.0] - 2026-03-09
+
+### Added
+
+- Claude Code OAuth support — reads `~/.claude/.credentials.json` and uses the Anthropic OAuth usage API before falling back to browser cookies
+- `--oauth-dir` flag for non-default credential locations (e.g. `~/.claude-work`)
+- Startup no longer requires a browser session when OAuth credentials are available
+
+
 ## [0.6.0] - 2026-03-09
 
 ### Added
