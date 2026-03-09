@@ -402,7 +402,8 @@ fn main() {
     };
 
     // Detach from the terminal so the shell prompt returns immediately.
-    #[cfg(unix)]
+    // Only on Linux — macOS ObjC runtime crashes if you fork() after init.
+    #[cfg(target_os = "linux")]
     {
         unsafe extern "C" {
             fn fork() -> i32;

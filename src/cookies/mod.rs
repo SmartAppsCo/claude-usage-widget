@@ -8,74 +8,22 @@ use std::path::Path;
 
 pub type CookieJar = HashMap<String, String>;
 
-/// Open a SQLite database read-only.  On Windows, Chrome/Edge hold an
-/// exclusive OS-level lock on the Cookies file; if the initial open fails
-/// we use the Restart Manager API to briefly release that lock.
+/// Open a SQLite database in immutable mode, bypassing all file locking.
+/// We never write to cookie databases, so this is safe and avoids conflicts
+/// with browsers holding WAL or exclusive locks.
 pub(crate) fn open_db(db_path: &Path) -> Result<rusqlite::Connection, CookieError> {
     use rusqlite::{Connection, OpenFlags};
 
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-
-    match Connection::open_with_flags(db_path, flags) {
-        Ok(conn) => Ok(conn),
-        #[cfg(windows)]
-        Err(_) => {
-            release_file_lock(db_path);
-            Connection::open_with_flags(db_path, flags).map_err(CookieError::Sqlite)
-        }
-        #[cfg(not(windows))]
-        Err(e) => Err(CookieError::Sqlite(e)),
-    }
-}
-
-/// Use the Windows Restart Manager API to release a file lock held by another
-/// process (e.g. Chrome/Edge holding the Cookies database).  The browser
-/// subprocess that held the lock will restart automatically.
-#[cfg(windows)]
-fn release_file_lock(path: &Path) {
-    use windows::core::{HSTRING, PCWSTR, PWSTR};
-    use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
-    use windows::Win32::System::RestartManager::*;
-
-    unsafe {
-        let file_path = HSTRING::from(path.as_os_str());
-        let mut session: u32 = 0;
-        let mut session_key_buf = [0u16; (CCH_RM_SESSION_KEY as usize) + 1];
-        let session_key = PWSTR(session_key_buf.as_mut_ptr());
-
-        if RmStartSession(&mut session, None, session_key) != ERROR_SUCCESS {
-            return;
-        }
-
-        if RmRegisterResources(
-            session,
-            Some(&[PCWSTR(file_path.as_ptr())]),
-            None,
-            None,
-        ) != ERROR_SUCCESS
-        {
-            let _ = RmEndSession(session);
-            return;
-        }
-
-        let mut needed: u32 = 0;
-        let mut info = [RM_PROCESS_INFO::default()];
-        let mut reasons: u32 = 0;
-        let mut count: u32 = 0;
-        let result = RmGetList(
-            session,
-            &mut needed,
-            &mut count,
-            Some(info.as_mut_ptr()),
-            &mut reasons,
-        );
-
-        if (result == ERROR_SUCCESS || result == ERROR_MORE_DATA) && needed > 0 {
-            let _ = RmShutdown(session, RmForceShutdown.0 as u32, None);
-        }
-
-        let _ = RmEndSession(session);
-    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+        | OpenFlags::SQLITE_OPEN_URI;
+    let encoded = db_path.display().to_string()
+        .replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('?', "%3F")
+        .replace('#', "%23");
+    let uri = format!("file:{encoded}?immutable=1");
+    Connection::open_with_flags(uri, flags).map_err(CookieError::Sqlite)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
