@@ -227,6 +227,65 @@ fn print_usage() {
     eprintln!("  --help                      Show this help");
 }
 
+/// If not running as admin, re-launch ourselves elevated via UAC and exit.
+#[cfg(target_os = "windows")]
+fn ensure_admin() {
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::HSTRING;
+
+    // Check if already elevated.
+    if is_elevated() {
+        return;
+    }
+
+    // Re-launch with "runas" to trigger UAC prompt.
+    let exe = std::env::current_exe().unwrap_or_default();
+    let args: String = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        let result = ShellExecuteW(
+            None,
+            &HSTRING::from("runas"),
+            &HSTRING::from(exe.as_os_str()),
+            &HSTRING::from(&args),
+            None,
+            SW_SHOWNORMAL,
+        );
+        // ShellExecuteW returns >32 on success.
+        if result.0 as usize > 32 {
+            std::process::exit(0); // original (non-elevated) process exits
+        }
+        // If user declined UAC or it failed, continue without elevation.
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_elevated() -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = windows::Win32::Foundation::HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut _),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && elevation.TokenIsElevated != 0
+    }
+}
+
 fn detect_browsers_or_exit() -> (Option<BrowserKind>, Option<Vec<BrowserKind>>) {
     let found = cookies::detect_browsers("claude.ai");
     if found.is_empty() {
@@ -248,6 +307,13 @@ fn detect_browsers_or_exit() -> (Option<BrowserKind>, Option<Vec<BrowserKind>>) 
 }
 
 fn main() {
+    // On Windows, Chrome/Edge 127+ use App-Bound Encryption (v20) which
+    // requires admin to decrypt.  Only elevate if we detect v20 cookies.
+    #[cfg(target_os = "windows")]
+    if !is_elevated() && cookies::needs_elevation("claude.ai") {
+        ensure_admin();
+    }
+
     #[cfg(target_os = "linux")]
     let use_x11 = prefer_xwayland();
 

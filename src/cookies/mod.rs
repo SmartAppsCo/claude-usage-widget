@@ -4,27 +4,78 @@ pub mod platform;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
-
-use tempfile::TempDir;
+use std::path::Path;
 
 pub type CookieJar = HashMap<String, String>;
 
-pub(crate) fn copy_db(db_path: &Path) -> Result<(TempDir, PathBuf), CookieError> {
-    let name = db_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    let tmp = TempDir::new().map_err(CookieError::Io)?;
-    let tmp_db = tmp.path().join(&name);
-    std::fs::copy(db_path, &tmp_db).map_err(CookieError::Io)?;
-    for ext in ["-wal", "-shm"] {
-        let src = db_path.with_file_name(format!("{name}{ext}"));
-        let dst = tmp.path().join(format!("{name}{ext}"));
-        let _ = std::fs::copy(&src, &dst);
+/// Open a SQLite database read-only.  On Windows, Chrome/Edge hold an
+/// exclusive OS-level lock on the Cookies file; if the initial open fails
+/// we use the Restart Manager API to briefly release that lock.
+pub(crate) fn open_db(db_path: &Path) -> Result<rusqlite::Connection, CookieError> {
+    use rusqlite::{Connection, OpenFlags};
+
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+
+    match Connection::open_with_flags(db_path, flags) {
+        Ok(conn) => Ok(conn),
+        #[cfg(windows)]
+        Err(_) => {
+            release_file_lock(db_path);
+            Connection::open_with_flags(db_path, flags).map_err(CookieError::Sqlite)
+        }
+        #[cfg(not(windows))]
+        Err(e) => Err(CookieError::Sqlite(e)),
     }
-    Ok((tmp, tmp_db))
+}
+
+/// Use the Windows Restart Manager API to release a file lock held by another
+/// process (e.g. Chrome/Edge holding the Cookies database).  The browser
+/// subprocess that held the lock will restart automatically.
+#[cfg(windows)]
+fn release_file_lock(path: &Path) {
+    use windows::core::{HSTRING, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows::Win32::System::RestartManager::*;
+
+    unsafe {
+        let file_path = HSTRING::from(path.as_os_str());
+        let mut session: u32 = 0;
+        let mut session_key_buf = [0u16; (CCH_RM_SESSION_KEY as usize) + 1];
+        let session_key = PWSTR(session_key_buf.as_mut_ptr());
+
+        if RmStartSession(&mut session, None, session_key) != ERROR_SUCCESS {
+            return;
+        }
+
+        if RmRegisterResources(
+            session,
+            Some(&[PCWSTR(file_path.as_ptr())]),
+            None,
+            None,
+        ) != ERROR_SUCCESS
+        {
+            let _ = RmEndSession(session);
+            return;
+        }
+
+        let mut needed: u32 = 0;
+        let mut info = [RM_PROCESS_INFO::default()];
+        let mut reasons: u32 = 0;
+        let mut count: u32 = 0;
+        let result = RmGetList(
+            session,
+            &mut needed,
+            &mut count,
+            Some(info.as_mut_ptr()),
+            &mut reasons,
+        );
+
+        if (result == ERROR_SUCCESS || result == ERROR_MORE_DATA) && needed > 0 {
+            let _ = RmShutdown(session, RmForceShutdown.0 as u32, None);
+        }
+
+        let _ = RmEndSession(session);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,7 +102,6 @@ pub enum CookieError {
     NoBrowserDir,
     NoCookieDb,
     Sqlite(rusqlite::Error),
-    Io(std::io::Error),
     Decrypt(String),
 }
 
@@ -61,10 +111,27 @@ impl fmt::Display for CookieError {
             CookieError::NoBrowserDir => write!(f, "Browser directory not found"),
             CookieError::NoCookieDb => write!(f, "No cookie database found"),
             CookieError::Sqlite(e) => write!(f, "SQLite error: {e}"),
-            CookieError::Io(e) => write!(f, "IO error: {e}"),
             CookieError::Decrypt(e) => write!(f, "Decrypt error: {e}"),
         }
     }
+}
+
+/// Check whether any Chromium browser has v20-encrypted cookies for the
+/// given domain.  This is a lightweight check that opens the DB and peeks at
+/// the raw `encrypted_value` prefix without decrypting anything.
+#[cfg(windows)]
+pub fn needs_elevation(domain: &str) -> bool {
+    let dirs: Vec<fn() -> Vec<std::path::PathBuf>> = vec![
+        platform::chrome_default_dirs,
+        platform::brave_default_dirs,
+        platform::edge_default_dirs,
+    ];
+    for dir_fn in dirs {
+        if chrome::has_v20_cookies(domain, dir_fn) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn read_cookies(

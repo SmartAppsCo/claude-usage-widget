@@ -120,6 +120,7 @@ pub struct UsageApp {
     title: String,
     title_explicit: bool,
     first_frame: bool,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     wm_name: String,
     always_on_top: bool,
     all_workspaces: bool,
@@ -257,6 +258,11 @@ impl eframe::App for UsageApp {
             ctx.style_mut(|s| {
                 s.interaction.selectable_labels = false;
                 s.visuals.panel_fill = BG;
+                // Dark background for the right-click context menu.
+                let menu_bg = egui::Color32::from_rgb(0x2a, 0x2a, 0x2a);
+                s.visuals.widgets.noninteractive.bg_fill = menu_bg;
+                s.visuals.window_fill = menu_bg;
+                s.visuals.window_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0x50, 0x50, 0x50));
             });
             let level = if self.always_on_top {
                 egui::WindowLevel::AlwaysOnTop

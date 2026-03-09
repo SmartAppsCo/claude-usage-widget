@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use rusqlite::Connection;
-
 use crate::cookies::platform::firefox_default_dir;
 use crate::cookies::{CookieError, CookieJar};
 
@@ -45,8 +43,7 @@ pub fn read(domain: &str, data_dir: Option<&str>) -> Result<CookieJar, CookieErr
     });
     let db_path = dbs.last().unwrap();
 
-    let (_tmp, tmp_db) = super::copy_db(db_path)?;
-    let conn = Connection::open(&tmp_db).map_err(CookieError::Sqlite)?;
+    let conn = super::open_db(db_path)?;
     let mut stmt = conn
         .prepare("SELECT name, value FROM moz_cookies WHERE host LIKE ?1")
         .map_err(CookieError::Sqlite)?;

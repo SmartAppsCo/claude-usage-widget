@@ -2,15 +2,9 @@ use std::path::PathBuf;
 
 use crate::cookies::CookieError;
 
+#[cfg(not(target_os = "windows"))]
 pub fn home_dir() -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +66,7 @@ pub fn chrome_default_dirs() -> Vec<PathBuf> {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return vec![];
     };
-    let p = PathBuf::from(local).join("Google/Chrome/User Data");
+    let p = PathBuf::from(local).join("Google").join("Chrome").join("User Data");
     if p.is_dir() {
         vec![p]
     } else {
@@ -118,7 +112,7 @@ pub fn brave_default_dirs() -> Vec<PathBuf> {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return vec![];
     };
-    let p = PathBuf::from(local).join("BraveSoftware/Brave-Browser/User Data");
+    let p = PathBuf::from(local).join("BraveSoftware").join("Brave-Browser").join("User Data");
     if p.is_dir() {
         vec![p]
     } else {
@@ -161,7 +155,7 @@ pub fn edge_default_dirs() -> Vec<PathBuf> {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return vec![];
     };
-    let p = PathBuf::from(local).join("Microsoft/Edge/User Data");
+    let p = PathBuf::from(local).join("Microsoft").join("Edge").join("User Data");
     if p.is_dir() {
         vec![p]
     } else {
@@ -182,9 +176,136 @@ pub fn chrome_encryption_key(_db_path: &std::path::Path) -> Option<Vec<u8>> {
 }
 
 #[cfg(target_os = "windows")]
+fn dpapi_decrypt(blob: &[u8]) -> Option<Vec<u8>> {
+    use windows::Win32::Security::Cryptography::*;
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: blob.len() as u32,
+        pbData: blob.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    unsafe {
+        CryptUnprotectData(&input, None, None, None, None, 0, &mut output).ok()?;
+        let key = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = windows::Win32::Foundation::LocalFree(Some(
+            windows::Win32::Foundation::HLOCAL(output.pbData as _),
+        ));
+        Some(key)
+    }
+}
+
+/// Impersonate SYSTEM by duplicating the token of lsass.exe or winlogon.exe.
+/// Returns the duplicated token handle on success.  Requires admin.
+#[cfg(target_os = "windows")]
+fn impersonate_system() -> Option<windows::Win32::Foundation::HANDLE> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::Foundation::*;
+    use windows::Win32::Security::*;
+    use windows::Win32::System::ProcessStatus::*;
+    use windows::Win32::System::Threading::*;
+
+    // Enable SeDebugPrivilege.
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlAdjustPrivilege(
+            privilege: i32,
+            enable: i32,
+            current_thread: i32,
+            previous_value: *mut i32,
+        ) -> i32;
+    }
+    let mut prev: i32 = 0;
+    // SE_DEBUG_PRIVILEGE = 20
+    unsafe { RtlAdjustPrivilege(20, 1, 0, &mut prev) };
+
+    // Find lsass.exe or winlogon.exe.
+    let mut pids = vec![0u32; 4096];
+    let mut needed: u32 = 0;
+    unsafe { EnumProcesses(pids.as_mut_ptr(), (pids.len() * 4) as u32, &mut needed).ok()? };
+    pids.truncate((needed / 4) as usize);
+
+    let mut target_pid = None;
+    for &pid in &pids {
+        let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) }) else {
+            continue;
+        };
+        let mut buf = [0u16; 260];
+        let len = unsafe { K32GetProcessImageFileNameW(h, &mut buf) } as usize;
+        let _ = unsafe { CloseHandle(h) };
+        if len == 0 { continue; }
+        let name = OsString::from_wide(&buf[..len]);
+        let name = name.to_string_lossy();
+        if name.ends_with("lsass.exe") {
+            target_pid = Some(pid);
+            break;
+        }
+        if name.ends_with("winlogon.exe") && target_pid.is_none() {
+            target_pid = Some(pid);
+        }
+    }
+
+    let pid = target_pid?;
+    let proc_h = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid).ok()? };
+    let mut token = HANDLE::default();
+    unsafe { OpenProcessToken(proc_h, TOKEN_DUPLICATE | TOKEN_QUERY, &mut token).ok()? };
+    let _ = unsafe { CloseHandle(proc_h) };
+
+    let mut dup_token = HANDLE::default();
+    unsafe {
+        DuplicateToken(token, SecurityImpersonation, &mut dup_token).ok()?;
+        CloseHandle(token).ok()?;
+        ImpersonateLoggedOnUser(dup_token).ok()?;
+    }
+    Some(dup_token)
+}
+
+#[cfg(target_os = "windows")]
+fn stop_impersonate(token: windows::Win32::Foundation::HANDLE) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Security::RevertToSelf;
+    unsafe {
+        let _ = CloseHandle(token);
+        let _ = RevertToSelf();
+    }
+}
+
+/// Derive the v20 (App-Bound Encryption) key.  Requires admin.
+/// Flow: base64 decode → strip "APPB" → DPAPI-as-SYSTEM → DPAPI-as-user → extract key.
+#[cfg(target_os = "windows")]
+fn appbound_encryption_key(app_bound_key_b64: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(app_bound_key_b64)
+        .ok()?;
+    let without_prefix = raw.strip_prefix(b"APPB")?;
+
+    // First DPAPI decrypt as SYSTEM.
+    let system_token = impersonate_system()?;
+    let system_decrypted = dpapi_decrypt(without_prefix);
+    stop_impersonate(system_token);
+    let system_decrypted = system_decrypted?;
+
+    // Second DPAPI decrypt as user.
+    let user_decrypted = dpapi_decrypt(&system_decrypted)?;
+
+    if user_decrypted.len() < 61 {
+        return None;
+    }
+
+    // The last 32 bytes of the user-decrypted result is the AES key.
+    let key = user_decrypted[user_decrypted.len() - 32..].to_vec();
+    Some(key)
+}
+
+#[cfg(target_os = "windows")]
 pub fn chrome_encryption_key(db_path: &std::path::Path) -> Option<Vec<u8>> {
     use base64::Engine;
-    use windows::Win32::Security::Cryptography::*;
 
     // Walk up from the cookie DB to find the Local State file.
     let local_state_path = {
@@ -200,33 +321,21 @@ pub fn chrome_encryption_key(db_path: &std::path::Path) -> Option<Vec<u8>> {
 
     let content = std::fs::read_to_string(&local_state_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    // Try App-Bound Encryption key first (Chrome/Edge 127+, v20 cookies).
+    if let Some(abk) = json["os_crypt"]["app_bound_encrypted_key"].as_str() {
+        if let Some(key) = appbound_encryption_key(abk) {
+            return Some(key);
+        }
+    }
+
+    // Fall back to legacy DPAPI key (v10/v11 cookies).
     let encrypted_key_b64 = json["os_crypt"]["encrypted_key"].as_str()?;
     let encrypted_key = base64::engine::general_purpose::STANDARD
         .decode(encrypted_key_b64)
         .ok()?;
-
-    // Strip "DPAPI" prefix (5 bytes).
     let dpapi_blob = encrypted_key.strip_prefix(b"DPAPI" as &[u8])?;
-
-    // Decrypt via DPAPI.
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: dpapi_blob.len() as u32,
-        pbData: dpapi_blob.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-
-    unsafe {
-        CryptUnprotectData(&input, None, None, None, None, 0, &mut output).ok()?;
-        let key = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        // Free the DPAPI-allocated buffer (ignore errors on cleanup).
-        let _ = windows::Win32::Foundation::LocalFree(Some(
-            windows::Win32::Foundation::HLOCAL(output.pbData as _),
-        ));
-        Some(key)
-    }
+    dpapi_decrypt(dpapi_blob)
 }
 
 // ---------------------------------------------------------------------------
@@ -359,13 +468,15 @@ pub fn decrypt_chrome_value(encrypted: &[u8], key: Option<&[u8]>) -> Result<Stri
     if encrypted.is_empty() {
         return Ok(String::new());
     }
-    if encrypted.len() < 3 || (encrypted[..3] != *b"v10" && encrypted[..3] != *b"v11") {
+    if encrypted.len() < 3
+        || (encrypted[..3] != *b"v10" && encrypted[..3] != *b"v11" && encrypted[..3] != *b"v20")
+    {
         return Ok(String::from_utf8_lossy(encrypted).into_owned());
     }
 
     let key = key.ok_or_else(|| CookieError::Decrypt("No encryption key available".into()))?;
 
-    // v10/v11 prefix (3 bytes), then 12-byte nonce, then ciphertext + 16-byte GCM tag.
+    // v10/v11/v20 prefix (3 bytes), then 12-byte nonce, then ciphertext + 16-byte GCM tag.
     let payload = &encrypted[3..];
     if payload.len() < 12 + 16 {
         return Err(CookieError::Decrypt("Encrypted value too short".into()));
@@ -381,6 +492,13 @@ pub fn decrypt_chrome_value(encrypted: &[u8], key: Option<&[u8]>) -> Result<Stri
         .decrypt(Nonce::from_slice(nonce), ciphertext)
         .map_err(|e| CookieError::Decrypt(format!("AES-GCM decrypt failed: {e}")))?;
 
-    String::from_utf8(plaintext)
+    // Chrome 130+ prepends SHA256(host_key) (32 bytes) to the plaintext.
+    let payload = if plaintext.len() > 32 && plaintext[..32].iter().any(|&b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r') {
+        &plaintext[32..]
+    } else {
+        &plaintext
+    };
+
+    String::from_utf8(payload.to_vec())
         .map_err(|e| CookieError::Decrypt(format!("UTF-8 decode failed: {e}")))
 }
