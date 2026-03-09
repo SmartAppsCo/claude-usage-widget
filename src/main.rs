@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod api;
+mod config;
 mod cookies;
 mod idle;
 mod widget;
@@ -206,6 +207,26 @@ fn print_usage() {
     eprintln!("  --help                      Show this help");
 }
 
+fn detect_browsers_or_exit() -> (Option<BrowserKind>, Option<Vec<BrowserKind>>) {
+    let found = cookies::detect_browsers("claude.ai");
+    if found.is_empty() {
+        eprintln!("No claude.ai session found in Firefox, Chrome, or Brave.");
+        std::process::exit(1);
+    }
+    if found.len() == 1 {
+        let b = *found.keys().next().unwrap();
+        (Some(b), None)
+    } else {
+        let mut browsers: Vec<BrowserKind> = found.keys().copied().collect();
+        browsers.sort_by_key(|b| match b {
+            BrowserKind::Firefox => 0,
+            BrowserKind::Chrome => 1,
+            BrowserKind::Brave => 2,
+        });
+        (None, Some(browsers))
+    }
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     let use_x11 = prefer_xwayland();
@@ -277,11 +298,14 @@ fn main() {
         std::process::exit(1);
     }
 
+    let config = config::Config::load();
+
     // Auto-install .desktop file and icon on Linux (idempotent).
     #[cfg(target_os = "linux")]
     install_desktop_entry();
 
     let (browser, picker_options) = if let Some(b) = browser {
+        // Explicit --browser flag
         let cookies = cookies::read_cookies(b, "claude.ai", data_dir.as_deref());
         match cookies {
             Ok(ref c) if c.contains_key("sessionKey") => {}
@@ -295,24 +319,18 @@ fn main() {
             }
         }
         (Some(b), None)
-    } else {
-        let found = cookies::detect_browsers("claude.ai");
-        if found.is_empty() {
-            eprintln!("No claude.ai session found in Firefox, Chrome, or Brave.");
-            std::process::exit(1);
-        }
-        if found.len() == 1 {
-            let b = *found.keys().next().unwrap();
-            (Some(b), None)
+    } else if let Some(saved) = config.browser_kind() {
+        // Try saved browser from config first
+        let ok = cookies::read_cookies(saved, "claude.ai", None)
+            .is_ok_and(|c| c.contains_key("sessionKey"));
+        if ok {
+            (Some(saved), None)
         } else {
-            let mut browsers: Vec<BrowserKind> = found.keys().copied().collect();
-            browsers.sort_by_key(|b| match b {
-                BrowserKind::Firefox => 0,
-                BrowserKind::Chrome => 1,
-                BrowserKind::Brave => 2,
-            });
-            (None, Some(browsers))
+            // Saved browser no longer works, fall back to detection
+            detect_browsers_or_exit()
         }
+    } else {
+        detect_browsers_or_exit()
     };
 
     // Detach from the terminal so the shell prompt returns immediately.
@@ -338,7 +356,7 @@ fn main() {
     // find exactly its own window when multiple instances are running.
     let wm_name = format!("Claude Usage {}", std::process::id());
 
-    let app = widget::UsageApp::new(browser, data_dir, picker_options, title, title_explicit, wm_name.clone());
+    let app = widget::UsageApp::new(browser, data_dir, picker_options, title, title_explicit, wm_name.clone(), config);
 
     use eframe::egui;
 

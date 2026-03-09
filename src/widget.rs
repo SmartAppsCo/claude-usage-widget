@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use crate::api::{self, UsageResponse};
+use crate::config::Config;
 use crate::cookies::{self, BrowserKind};
 
 const BG: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xf5, 0xf0);
@@ -119,7 +120,11 @@ impl UsageApp {
         title: String,
         title_explicit: bool,
         wm_name: String,
+        config: Config,
     ) -> Self {
+        let refresh_secs = config.refresh_secs.unwrap_or(DEFAULT_REFRESH_SECS);
+        let always_on_top = config.always_on_top.unwrap_or(true);
+        let all_workspaces = config.all_workspaces.unwrap_or(true);
         Self {
             browser,
             data_dir,
@@ -132,15 +137,25 @@ impl UsageApp {
             cached_data: None,
             last_fetch: None,
             last_fetch_start: None,
-            refresh_secs: DEFAULT_REFRESH_SECS,
+            refresh_secs,
             title,
             title_explicit,
             first_frame: true,
             wm_name,
-            always_on_top: true,
-            all_workspaces: true,
+            always_on_top,
+            all_workspaces,
             last_height: 0.0,
         }
+    }
+
+    fn save_config(&self) {
+        Config {
+            browser: self.browser.map(|b| b.to_string()),
+            refresh_secs: Some(self.refresh_secs),
+            always_on_top: Some(self.always_on_top),
+            all_workspaces: Some(self.all_workspaces),
+        }
+        .save();
     }
 
     fn start_fetch(&mut self) {
@@ -224,7 +239,12 @@ impl eframe::App for UsageApp {
                 s.interaction.selectable_labels = false;
                 s.visuals.panel_fill = BG;
             });
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
+            let level = if self.always_on_top {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
         }
 
         // ESC to close
@@ -294,6 +314,7 @@ impl eframe::App for UsageApp {
                             );
                             if resp.clicked() {
                                 self.refresh_secs = secs;
+                                self.save_config();
                                 ui.close_menu();
                             }
                         }
@@ -312,6 +333,7 @@ impl eframe::App for UsageApp {
                                     egui::WindowLevel::Normal
                                 };
                                 ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+                                self.save_config();
                                 ui.close_menu();
                             }
                         }
@@ -325,6 +347,7 @@ impl eframe::App for UsageApp {
                                 self.all_workspaces = !self.all_workspaces;
                                 #[cfg(target_os = "linux")]
                                 toggle_all_workspaces(self.wm_name.clone(), self.all_workspaces);
+                                self.save_config();
                                 ui.close_menu();
                             }
                         }
@@ -389,6 +412,7 @@ impl eframe::App for UsageApp {
                                 if ui.button(label).clicked() {
                                     self.browser = Some(b);
                                     self.picker_options = None;
+                                    self.save_config();
                                     self.start_fetch();
                                 }
                             }
