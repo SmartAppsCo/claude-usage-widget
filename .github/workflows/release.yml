@@ -40,8 +40,16 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (unix)
-        if: runner.os != 'Windows'
+      - name: Package (macOS .app bundle)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          ./scripts/package-macos.sh target/${{ matrix.target }}/release/claude-usage dist
+          cd dist
+          zip -r ../claude-usage-${{ matrix.target }}.zip "Claude Usage.app"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../claude-usage-${{ matrix.target }}.tar.gz claude-usage

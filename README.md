@@ -36,11 +36,11 @@ Download the latest binary for your platform from the [Releases](https://github.
 | Platform | File |
 |---|---|
 | Linux (x86_64) | `claude-usage-x86_64-unknown-linux-gnu.tar.gz` |
-| macOS (Apple Silicon) | `claude-usage-aarch64-apple-darwin.tar.gz` |
-| macOS (Intel) | `claude-usage-x86_64-apple-darwin.tar.gz` |
+| macOS (Apple Silicon) | `claude-usage-aarch64-apple-darwin.zip` |
+| macOS (Intel) | `claude-usage-x86_64-apple-darwin.zip` |
 | Windows (x86_64) | `claude-usage-x86_64-pc-windows-msvc.zip` |
 
-Extract the archive and place the `claude-usage` binary somewhere in your `PATH`.
+Extract the archive. On macOS, double-click `Claude Usage.app` to run (or drag it to Applications). On Linux/Windows, place the binary somewhere in your `PATH`.
 
 Alternatively, build from source with [Cargo](https://rustup.rs/):
 
