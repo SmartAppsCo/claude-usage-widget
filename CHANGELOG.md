@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.6.0] - 2026-03-09
+
+### Added
+
+- Session cookies cached to disk after first successful API call — subsequent launches skip browser DB access, decryption, keychain prompts, and UAC elevation entirely
+- On Windows, mid-session cookie expiry shows a context-aware elevation dialog before re-reading from the browser
+
+### Changed
+
+- Windows UAC elevation deferred until the moment Chromium cookies are needed (not at startup)
+- Removed `has_v20_cookies` pre-check — always elevate for Chromium browsers on Windows since the Restart Manager needs admin regardless
+
+
 ## [0.5.2] - 2026-03-09
 
 ### Fixed
