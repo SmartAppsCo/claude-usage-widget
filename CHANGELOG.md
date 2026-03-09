@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.3.0] - 2026-03-09
+
+### Added
+
+- Persistent config file saves refresh interval, always-on-top, and all-workspaces preferences across launches
+- Config stored at OS-specific user config directory (`XDG_CONFIG_HOME`, `~/Library/Application Support`, `%APPDATA%`)
+
+### Changed
+
+- Browser detection now runs in parallel (one thread per browser) for faster startup
+
+
 ## [0.2.0] - 2026-03-09
 
 ### Added
