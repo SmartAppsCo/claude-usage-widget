@@ -15,6 +15,13 @@ pub struct Config {
     /// same binary (macOS ties "Always Allow" to the binary path).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chromium_prompted_exe: Option<String>,
+    /// Cached browser cookies so we don't need to re-read the browser DB
+    /// and re-decrypt on every launch.  Re-read only when the API rejects them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_cookies: Option<std::collections::HashMap<String, String>>,
+    /// Which browser the cached cookies came from (for fallback re-reads).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_browser: Option<String>,
 }
 
 impl Config {

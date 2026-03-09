@@ -508,7 +508,7 @@ pub fn decrypt_chrome_value(encrypted: &[u8], key: Option<&[u8]>) -> Result<Stri
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
-fn is_elevated() -> bool {
+pub fn is_elevated() -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -533,15 +533,22 @@ fn is_elevated() -> bool {
     }
 }
 
-/// Elevate to admin if not already elevated.  Needed on Windows because
-/// Chrome/Edge hold exclusive locks on cookie databases — the Restart Manager
-/// requires admin privileges to release them.
-///
-/// Returns true if already elevated.  If not, shows an explanation dialog,
+/// Elevate to admin if not already elevated.  Shows an explanation dialog,
 /// re-launches via UAC, and exits the current process (never returns).
-/// Returns false only if the user cancels.
+/// Returns true if already elevated.  Returns false if the user cancels.
 #[cfg(target_os = "windows")]
 pub fn elevate_if_needed() -> bool {
+    elevate_with_message(
+        "Chrome, Edge, and Brave lock their cookie databases and use \
+         App-Bound Encryption. Claude Usage needs administrator access \
+         to read and decrypt them.\n\n\
+         Windows will prompt for permission next.",
+    )
+}
+
+/// Like `elevate_if_needed` but with a custom explanation message.
+#[cfg(target_os = "windows")]
+pub fn elevate_with_message(msg: &str) -> bool {
     if is_elevated() {
         return true;
     }
@@ -549,10 +556,6 @@ pub fn elevate_if_needed() -> bool {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
-    let msg = "Chrome, Edge, and Brave lock their cookie databases and use \
-               App-Bound Encryption. Claude Usage needs administrator access \
-               to read and decrypt them.\n\n\
-               Windows will prompt for permission next.";
     let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
     let caption: Vec<u16> = "Claude Usage\0".encode_utf16().collect();
     let result = unsafe {

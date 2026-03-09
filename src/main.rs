@@ -334,27 +334,45 @@ fn main() {
     #[cfg(target_os = "linux")]
     install_desktop_entry();
 
-    let browser = if let Some(b) = browser {
-        // Explicit --browser flag — on Windows, elevate for Chromium browsers
-        // so the Restart Manager can release the cookie DB lock.
-        #[cfg(target_os = "windows")]
-        if matches!(b, BrowserKind::Chrome | BrowserKind::Brave | BrowserKind::Edge) {
-            if !cookies::platform::elevate_if_needed() {
-                std::process::exit(0);
-            }
-        }
+    // Try cached cookies from a previous run — avoids reading browser DB,
+    // decryption, Restart Manager, keychain prompts, etc.  The first API
+    // call will validate them; if they're stale the fetch thread re-reads.
+    let mut initial_cookies = config.cached_cookies.clone();
+    let cached_browser = config.cached_browser.as_deref().and_then(|s| match s {
+        "firefox" => Some(BrowserKind::Firefox),
+        "chrome" => Some(BrowserKind::Chrome),
+        "brave" => Some(BrowserKind::Brave),
+        "edge" => Some(BrowserKind::Edge),
+        #[cfg(target_os = "macos")]
+        "safari" => Some(BrowserKind::Safari),
+        _ => None,
+    });
 
-        let cookies = cookies::read_cookies(b, "claude.ai", data_dir.as_deref());
-        match cookies {
-            Ok(ref c) if c.contains_key("sessionKey") => {}
-            Ok(_) => {
-                fatal_error(&format!("No claude.ai session found in {b}."));
+    let has_cached_session = initial_cookies.as_ref().is_some_and(|c| c.contains_key("sessionKey"));
+
+    let browser = if let Some(b) = browser {
+        // Explicit --browser: skip DB read if we have cached cookies (the
+        // fetch thread will validate them and re-read from this browser on failure).
+        if !has_cached_session {
+            #[cfg(target_os = "windows")]
+            if matches!(b, BrowserKind::Chrome | BrowserKind::Brave | BrowserKind::Edge) {
+                if !cookies::platform::elevate_if_needed() {
+                    std::process::exit(0);
+                }
             }
-            Err(e) => {
-                fatal_error(&format!("Error reading {b} cookies: {e}"));
+
+            match cookies::read_cookies(b, "claude.ai", data_dir.as_deref()) {
+                Ok(c) if c.contains_key("sessionKey") => {
+                    initial_cookies = Some(c);
+                }
+                Ok(_) => fatal_error(&format!("No claude.ai session found in {b}.")),
+                Err(e) => fatal_error(&format!("Error reading {b} cookies: {e}")),
             }
         }
         b
+    } else if has_cached_session {
+        // Cached cookies available — use the browser they came from for fallback.
+        cached_browser.unwrap_or_else(|| detect_browser_or_exit())
     } else {
         detect_browser_or_exit()
     };
@@ -383,7 +401,7 @@ fn main() {
     // find exactly its own window when multiple instances are running.
     let wm_name = format!("Claude Usage {}", std::process::id());
 
-    let app = widget::UsageApp::new(browser, data_dir, title, title_explicit, wm_name.clone(), config);
+    let app = widget::UsageApp::new(browser, data_dir, title, title_explicit, wm_name.clone(), config, initial_cookies);
 
     use eframe::egui;
 

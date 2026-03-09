@@ -106,6 +106,8 @@ struct SharedState {
     data: Option<Result<UsageResponse, String>>,
     fetching: bool,
     account_name: Option<String>,
+    /// Updated cookies from the fetch thread (when re-read from DB).
+    fresh_cookies: Option<cookies::CookieJar>,
 }
 
 pub struct UsageApp {
@@ -113,6 +115,7 @@ pub struct UsageApp {
     data_dir: Option<String>,
     shared: Arc<Mutex<SharedState>>,
     cached_data: Option<Result<UsageResponse, String>>,
+    cached_cookies: Option<cookies::CookieJar>,
     last_fetch: Option<Instant>,
     last_fetch_start: Option<Instant>,
     refresh_secs: u64,
@@ -135,6 +138,7 @@ impl UsageApp {
         title_explicit: bool,
         wm_name: String,
         config: Config,
+        initial_cookies: Option<cookies::CookieJar>,
     ) -> Self {
         let refresh_secs = config.refresh_secs.unwrap_or(DEFAULT_REFRESH_SECS);
         let always_on_top = config.always_on_top.unwrap_or(true);
@@ -146,8 +150,10 @@ impl UsageApp {
                 data: None,
                 fetching: false,
                 account_name: None,
+                fresh_cookies: None,
             })),
             cached_data: None,
+            cached_cookies: initial_cookies,
             last_fetch: None,
             last_fetch_start: None,
             refresh_secs,
@@ -183,28 +189,70 @@ impl UsageApp {
         self.last_fetch_start = Some(Instant::now());
         let shared = Arc::clone(&self.shared);
         let data_dir = self.data_dir.clone();
+        let cached_cookies = self.cached_cookies.clone();
         let need_name = !self.title_explicit && self.shared.lock().unwrap().account_name.is_none();
         std::thread::spawn(move || {
-            let jar = cookies::read_cookies(browser, "claude.ai", data_dir.as_deref());
-            let (result, name) = match jar {
-                Ok(cookies) => {
-                    let result = api::fetch_with_cookies(&cookies);
-                    let name = if need_name {
-                        api::fetch_account_name(&cookies).ok()
-                    } else {
-                        None
-                    };
-                    (result, name)
-                }
-                Err(e) => (Err(format!("Cookie error: {e}")), None),
-            };
+            // Try cached cookies first, fall back to re-reading from browser DB.
+            let (result, name, fresh) = Self::fetch_with_fallback(
+                cached_cookies, browser, data_dir.as_deref(), need_name,
+            );
             let mut s = shared.lock().unwrap();
             s.data = Some(result);
+            s.fresh_cookies = fresh;
             if let Some(n) = name {
                 s.account_name = Some(n);
             }
             s.fetching = false;
         });
+    }
+
+    /// Try API with cached cookies. On failure, re-read from the browser DB
+    /// and retry once. Returns (api_result, account_name, new_cookies_if_reread).
+    fn fetch_with_fallback(
+        cached: Option<cookies::CookieJar>,
+        browser: BrowserKind,
+        data_dir: Option<&str>,
+        need_name: bool,
+    ) -> (Result<UsageResponse, String>, Option<String>, Option<cookies::CookieJar>) {
+        // Try cached cookies first.
+        if let Some(ref jar) = cached {
+            if let Ok(data) = api::fetch_with_cookies(jar) {
+                let name = if need_name { api::fetch_account_name(jar).ok() } else { None };
+                return (Ok(data), name, None);
+            }
+        }
+
+        // Cached cookies missing or rejected — re-read from browser DB.
+        let jar = match cookies::read_cookies(browser, "claude.ai", data_dir) {
+            Ok(jar) => jar,
+            Err(_) => {
+                // On Windows, the DB read may fail because we launched with
+                // cached cookies and skipped elevation.  Elevate now.
+                #[cfg(target_os = "windows")]
+                if matches!(browser, BrowserKind::Chrome | BrowserKind::Brave | BrowserKind::Edge) {
+                    let msg = if cached.is_some() {
+                        "Your Claude session cookie has expired. Claude Usage needs \
+                         administrator access to re-read cookies from the browser.\n\n\
+                         The app will restart with the required permissions."
+                    } else {
+                        "Chrome, Edge, and Brave lock their cookie databases and use \
+                         App-Bound Encryption. Claude Usage needs administrator access \
+                         to read and decrypt them.\n\n\
+                         Windows will prompt for permission next."
+                    };
+                    // This exits the process and re-launches elevated.
+                    cookies::platform::elevate_with_message(msg);
+                }
+
+                return (Err("Could not read cookies from browser".into()), None, None);
+            }
+        };
+
+        let result = api::fetch_with_cookies(&jar);
+        let name = if need_name { api::fetch_account_name(&jar).ok() } else { None };
+        // Only update the cache if the fresh cookies actually worked.
+        let fresh = if result.is_ok() { Some(jar) } else { None };
+        (result, name, fresh)
     }
 
     fn poll_result(&mut self) {
@@ -213,6 +261,15 @@ impl UsageApp {
             if !self.title_explicit {
                 self.title = name;
             }
+        }
+        // Pick up fresh cookies from the fetch thread (re-read from browser DB).
+        if let Some(jar) = s.fresh_cookies.take() {
+            self.cached_cookies = Some(jar.clone());
+            // Persist to config so future launches skip the browser DB.
+            let mut config = Config::load();
+            config.cached_cookies = Some(jar);
+            config.cached_browser = Some(self.browser.to_string());
+            config.save();
         }
         if let Some(result) = s.data.take() {
             match &result {
