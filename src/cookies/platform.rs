@@ -549,8 +549,9 @@ pub fn elevate_if_needed() -> bool {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
-    let msg = "Chrome and Edge lock their cookie databases. \
-               Claude Usage needs administrator access to read them.\n\n\
+    let msg = "Chrome, Edge, and Brave lock their cookie databases and use \
+               App-Bound Encryption. Claude Usage needs administrator access \
+               to read and decrypt them.\n\n\
                Windows will prompt for permission next.";
     let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
     let caption: Vec<u16> = "Claude Usage\0".encode_utf16().collect();

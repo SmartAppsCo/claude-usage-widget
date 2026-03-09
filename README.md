@@ -23,8 +23,8 @@ The widget auto-detects your browser and reads cookies directly. Depending on th
 | **macOS** | Firefox | None |
 | **macOS** | Chrome, Brave, Edge | macOS Keychain password (click "Always Allow" to avoid repeat prompts) |
 | **macOS** | Safari | Requires Full Disk Access in System Settings → Privacy & Security |
-| **Windows** | Chrome, Edge (v127+) | UAC elevation prompt (needed for App-Bound Encryption) |
-| **Windows** | Firefox, Brave | None |
+| **Windows** | Chrome, Edge, Brave | UAC elevation prompt (needed to release cookie DB locks and decrypt App-Bound Encryption) |
+| **Windows** | Firefox | None |
 | **Linux** | All | None |
 
 Browsers are tried in order until a valid session is found. On macOS, Firefox is tried first to avoid unnecessary prompts. Use `--browser` to skip auto-detection and target a specific browser.
