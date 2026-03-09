@@ -10,18 +10,34 @@ Especially useful for heavy Claude Code users who burn through their allocation 
 
 ## Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (for building from source)
 - Logged into claude.ai in a supported browser (Chrome, Brave, or Firefox)
 
 The widget reads your session cookie to fetch usage data — no API key needed.
 
 ## Install
 
+Download the latest binary for your platform from the [Releases](https://github.com/SmartAppsCo/claude-usage-widget/releases) page:
+
+| Platform | File |
+|---|---|
+| Linux (x86_64) | `claude-usage-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS (Apple Silicon) | `claude-usage-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `claude-usage-x86_64-apple-darwin.tar.gz` |
+| Windows (x86_64) | `claude-usage-x86_64-pc-windows-msvc.zip` |
+
+Extract the archive and place the `claude-usage` binary somewhere in your `PATH`.
+
+Alternatively, build from source with [Cargo](https://rustup.rs/):
+
 ```
 cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.3.0
 ```
 
-This places the `claude-usage` binary in `~/.cargo/bin/` (make sure it's in your `PATH`).
+On Linux, building from source requires these system packages:
+
+```
+sudo apt install libgtk-3-dev libxcb-screensaver0-dev
+```
 
 ## Options
 
