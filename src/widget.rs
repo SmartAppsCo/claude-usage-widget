@@ -23,6 +23,8 @@ const DEFAULT_REFRESH_SECS: u64 = 300;
 const IDLE_THRESHOLD_SECS: u64 = 60;
 const PADDING: f32 = 10.0;
 const MIN_HEIGHT: f32 = 274.0;
+const SNAP_SECS: f64 = 0.7;
+const SNAP_STAGGER: f64 = 0.12;
 
 const REFRESH_OPTIONS: &[(u64, &str)] = &[
     (60, "1 min"),
@@ -39,6 +41,18 @@ const WEEKLY_KEYS: &[(&str, &str)] = &[
     ("seven_day_sonnet", "Sonnet"),
     ("seven_day_cowork", "Cowork"),
 ];
+
+fn ease_out_back(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    let c1: f64 = 2.5;
+    let c3 = c1 + 1.0;
+    1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+}
+
+fn with_alpha(c: egui::Color32, a: f32) -> egui::Color32 {
+    let [r, g, b, _] = c.to_array();
+    egui::Color32::from_rgba_unmultiplied(r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8)
+}
 
 fn bar_color(pct: f64) -> egui::Color32 {
     if pct < 75.0 {
@@ -110,6 +124,7 @@ pub struct UsageApp {
     always_on_top: bool,
     all_workspaces: bool,
     last_height: f32,
+    data_arrived_at: Option<Instant>,
 }
 
 impl UsageApp {
@@ -145,6 +160,7 @@ impl UsageApp {
             always_on_top,
             all_workspaces,
             last_height: 0.0,
+            data_arrived_at: None,
         }
     }
 
@@ -205,8 +221,12 @@ impl UsageApp {
         if let Some(result) = s.data.take() {
             match &result {
                 Ok(_) => {
+                    let first_success = !matches!(&self.cached_data, Some(Ok(_)));
                     self.cached_data = Some(result);
                     self.last_fetch = Some(Instant::now());
+                    if first_success {
+                        self.data_arrived_at = Some(Instant::now());
+                    }
                 }
                 Err(_) => {
                     if self.cached_data.is_none() || self.cached_data.as_ref().is_some_and(|r| r.is_err()) {
@@ -432,9 +452,14 @@ impl eframe::App for UsageApp {
                             );
                         }
                         Some(Ok(data)) => {
+                            let elapsed = self.data_arrived_at.map_or(f64::MAX, |t| t.elapsed().as_secs_f64());
+                            let mut section_idx: usize = 0;
+
                             // Five-hour (current session)
                             if let Some(bucket) = data.get("five_hour") {
-                                Self::render_section(ui, "Current session", bucket.utilization.unwrap_or(0.0), bucket.resets_at.as_deref());
+                                let t = ((elapsed - section_idx as f64 * SNAP_STAGGER) / SNAP_SECS).clamp(0.0, 1.0);
+                                Self::render_section(ui, "Current session", bucket.utilization.unwrap_or(0.0), bucket.resets_at.as_deref(), t);
+                                section_idx += 1;
                             }
 
                             // Weekly limits
@@ -443,27 +468,41 @@ impl eframe::App for UsageApp {
                                 .filter_map(|(k, label)| data.get(*k).map(|b| (*label, b)))
                                 .collect();
                             if !weekly.is_empty() {
+                                let header_t = ((elapsed - section_idx as f64 * SNAP_STAGGER) / SNAP_SECS).clamp(0.0, 1.0);
+                                let header_alpha = (header_t * 6.0).min(1.0) as f32;
                                 ui.add_space(2.0);
                                 ui.label(
                                     egui::RichText::new("Weekly limits")
-                                        .color(FG)
+                                        .color(with_alpha(FG, header_alpha))
                                         .size(16.0)
                                         .font(egui::FontId::new(16.0, egui::FontFamily::Name("bold".into()))),
                                 );
                                 ui.add_space(2.0);
                                 for (label, bucket) in &weekly {
-                                    Self::render_section(ui, label, bucket.utilization.unwrap_or(0.0), bucket.resets_at.as_deref());
+                                    let t = ((elapsed - section_idx as f64 * SNAP_STAGGER) / SNAP_SECS).clamp(0.0, 1.0);
+                                    Self::render_section(ui, label, bucket.utilization.unwrap_or(0.0), bucket.resets_at.as_deref(), t);
+                                    section_idx += 1;
                                 }
+                            }
+
+                            // Rapid repaint during snap-in animation
+                            let anim_end = section_idx as f64 * SNAP_STAGGER + SNAP_SECS;
+                            if elapsed < anim_end {
+                                ui.ctx().request_repaint_after(Duration::from_millis(16));
                             }
                         }
                     }
 
                     // Footer (only when we have fetched at least once)
                     if let Some(t) = self.last_fetch {
+                        let footer_alpha = self.data_arrived_at.map_or(1.0_f32, |arrived| {
+                            let e = arrived.elapsed().as_secs_f64();
+                            ((e - 0.3) * 4.0).clamp(0.0, 1.0) as f32
+                        });
                         ui.add_space(2.0);
                         ui.label(
                             egui::RichText::new(updated_ago(t))
-                                .color(FOOTER_DIM)
+                                .color(with_alpha(FOOTER_DIM, footer_alpha))
                                 .size(10.0),
                         );
                     }
@@ -533,18 +572,21 @@ impl UsageApp {
         ctx.request_repaint_after(Duration::from_millis(30));
     }
 
-    fn render_section(ui: &mut egui::Ui, label: &str, utilization: f64, resets_at: Option<&str>) {
+    fn render_section(ui: &mut egui::Ui, label: &str, utilization: f64, resets_at: Option<&str>, anim_t: f64) {
+        let bar_t = ease_out_back(anim_t);
+        let text_alpha = (anim_t * 6.0).min(1.0) as f32;
+
         let pct = utilization.round().min(100.0);
         let color = bar_color(pct);
 
         ui.label(
             egui::RichText::new(label)
-                .color(FG)
+                .color(with_alpha(FG, text_alpha))
                 .font(egui::FontId::new(13.0, egui::FontFamily::Name("bold".into()))),
         );
         let reset_text = time_left(resets_at);
         if !reset_text.is_empty() {
-            ui.label(egui::RichText::new(&reset_text).color(DIM).size(11.0));
+            ui.label(egui::RichText::new(&reset_text).color(with_alpha(DIM, text_alpha)).size(11.0));
         }
 
         // Progress bar + percentage
@@ -555,16 +597,33 @@ impl UsageApp {
                 egui::Sense::hover(),
             );
             let painter = ui.painter_at(rect);
-            painter.rect_filled(rect, 2.0, BAR_BG);
-            let fill_w = BAR_W * (pct as f32) / 100.0;
+
+            // Bar height bounces — grows from thin, overshoots tall, settles
+            let h_scale = bar_t.max(0.0).min(1.15) as f32;
+            let draw_h = BAR_H * h_scale;
+            let y_off = (BAR_H - draw_h) / 2.0;
+            let bar_rect = egui::Rect::from_min_size(
+                rect.min + egui::vec2(0.0, y_off),
+                egui::vec2(BAR_W, draw_h),
+            );
+            painter.rect_filled(bar_rect, 2.0, BAR_BG);
+
+            // Fill overshoots width then settles — clamp to bar width
+            let fill_w = (BAR_W * (pct as f32) / 100.0 * bar_t as f32).min(BAR_W);
             if fill_w > 0.0 {
-                let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, BAR_H));
+                let fill_rect = egui::Rect::from_min_size(
+                    bar_rect.min,
+                    egui::vec2(fill_w, draw_h),
+                );
                 painter.rect_filled(fill_rect, 2.0, color);
             }
+
             ui.add_space(3.0);
+            // Percentage counts up with the bar
+            let display_pct = (pct * bar_t).min(100.0);
             ui.label(
-                egui::RichText::new(format!("{:.0}%", pct))
-                    .color(DIM)
+                egui::RichText::new(format!("{:.0}%", display_pct))
+                    .color(with_alpha(DIM, text_alpha))
                     .size(11.0),
             );
         });
