@@ -1,6 +1,8 @@
 pub mod chrome;
 pub mod firefox;
 pub mod platform;
+#[cfg(target_os = "macos")]
+pub mod safari;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -32,6 +34,8 @@ pub enum BrowserKind {
     Chrome,
     Brave,
     Edge,
+    #[cfg(target_os = "macos")]
+    Safari,
 }
 
 impl fmt::Display for BrowserKind {
@@ -41,6 +45,8 @@ impl fmt::Display for BrowserKind {
             BrowserKind::Chrome => write!(f, "chrome"),
             BrowserKind::Brave => write!(f, "brave"),
             BrowserKind::Edge => write!(f, "edge"),
+            #[cfg(target_os = "macos")]
+            BrowserKind::Safari => write!(f, "safari"),
         }
     }
 }
@@ -49,6 +55,8 @@ impl fmt::Display for BrowserKind {
 pub enum CookieError {
     NoBrowserDir,
     NoCookieDb,
+    #[cfg(target_os = "macos")]
+    PermissionDenied,
     Sqlite(rusqlite::Error),
     Decrypt(String),
 }
@@ -58,6 +66,8 @@ impl fmt::Display for CookieError {
         match self {
             CookieError::NoBrowserDir => write!(f, "Browser directory not found"),
             CookieError::NoCookieDb => write!(f, "No cookie database found"),
+            #[cfg(target_os = "macos")]
+            CookieError::PermissionDenied => write!(f, "Permission denied"),
             CookieError::Sqlite(e) => write!(f, "SQLite error: {e}"),
             CookieError::Decrypt(e) => write!(f, "Decrypt error: {e}"),
         }
@@ -92,25 +102,79 @@ pub fn read_cookies(
         BrowserKind::Chrome => chrome::read(domain, data_dir, platform::chrome_default_dirs),
         BrowserKind::Brave => chrome::read(domain, data_dir, platform::brave_default_dirs),
         BrowserKind::Edge => chrome::read(domain, data_dir, platform::edge_default_dirs),
+        #[cfg(target_os = "macos")]
+        BrowserKind::Safari => safari::read(domain),
     }
 }
 
-pub fn detect_browsers(domain: &str) -> HashMap<BrowserKind, CookieJar> {
-    let browsers = [BrowserKind::Firefox, BrowserKind::Chrome, BrowserKind::Brave, BrowserKind::Edge];
-    let handles: Vec<_> = browsers
-        .iter()
-        .map(|&b| {
-            let domain = domain.to_owned();
-            std::thread::spawn(move || (b, read_cookies(b, &domain, None)))
-        })
-        .collect();
-    let mut found = HashMap::new();
-    for handle in handles {
-        if let Ok((b, Ok(cookies))) = handle.join()
-            && cookies.contains_key("sessionKey")
+/// Try browsers in priority order, return the first one with a valid session.
+/// On macOS/Windows, shows explanatory dialogs before permission prompts.
+pub fn detect_browser(domain: &str) -> Option<BrowserKind> {
+    // Order: prompt-free browsers first, then browsers that may prompt.
+    // Safari last on macOS: it requires Full Disk Access (multi-step grant),
+    // while the keychain prompt for Chromium is just a password entry.
+    #[cfg(target_os = "macos")]
+    let browsers = &[
+        BrowserKind::Firefox,
+        BrowserKind::Chrome,
+        BrowserKind::Brave,
+        BrowserKind::Edge,
+        BrowserKind::Safari,
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let browsers = &[
+        BrowserKind::Firefox,
+        BrowserKind::Chrome,
+        BrowserKind::Brave,
+        BrowserKind::Edge,
+    ];
+
+    #[cfg(target_os = "macos")]
+    let mut prompted_keychain = false;
+    #[cfg(target_os = "windows")]
+    let mut prompted_elevation = false;
+
+    for &b in browsers {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let is_chromium = matches!(b, BrowserKind::Chrome | BrowserKind::Brave | BrowserKind::Edge);
+
+        // On macOS, handle special prompts before attempting reads.
+        #[cfg(target_os = "macos")]
         {
-            found.insert(b, cookies);
+            if b == BrowserKind::Safari {
+                match safari::read(domain) {
+                    Ok(cookies) if cookies.contains_key("sessionKey") => return Some(b),
+                    Err(CookieError::PermissionDenied) => {
+                        platform::prompt_full_disk_access();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            // Show keychain dialog once before the first Chromium browser.
+            if !prompted_keychain && is_chromium {
+                prompted_keychain = true;
+                if !platform::prompt_keychain_access() {
+                    return None; // user cancelled
+                }
+            }
+        }
+
+        // On Windows, prompt for elevation before trying Chromium browsers
+        // (only if v20 App-Bound Encryption is detected).
+        #[cfg(target_os = "windows")]
+        if !prompted_elevation && is_chromium {
+            prompted_elevation = true;
+            if !platform::prompt_and_elevate_if_needed(domain) {
+                return None; // user cancelled
+            }
+        }
+
+        if let Ok(cookies) = read_cookies(b, domain, None) {
+            if cookies.contains_key("sessionKey") {
+                return Some(b);
+            }
         }
     }
-    found
+    None
 }

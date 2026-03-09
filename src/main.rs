@@ -213,6 +213,33 @@ fn fatal_error(msg: &str) -> ! {
             MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(caption.as_ptr()), MB_OK | MB_ICONERROR);
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display dialog {:?} buttons {{\"OK\"}} default button \"OK\" with icon stop with title \"Claude Usage\"",
+            msg
+        );
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try zenity (GTK), then kdialog (KDE), then notify-send as fallback.
+        let shown = std::process::Command::new("zenity")
+            .args(["--error", "--title=Claude Usage", "--text", msg])
+            .output()
+            .is_ok_and(|o| o.status.success())
+            || std::process::Command::new("kdialog")
+                .args(["--error", msg, "--title", "Claude Usage"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+        if !shown {
+            let _ = std::process::Command::new("notify-send")
+                .args(["--urgency=critical", "Claude Usage", msg])
+                .output();
+        }
+    }
     std::process::exit(1);
 }
 
@@ -220,100 +247,21 @@ fn print_usage() {
     eprintln!("Usage: claude-usage [OPTIONS]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --browser <firefox|chrome|brave|edge>  Browser to read cookies from");
+    eprintln!("  --browser <BROWSER>         Browser to read cookies from");
+    eprintln!("                              (firefox, chrome, brave, edge, safari)");
     eprintln!("  --data-dir <PATH>           Browser data directory");
     eprintln!("  --title <NAME>              Widget title (default: Plan Usage)");
     eprintln!("  --uninstall                 Remove desktop entry and icon");
     eprintln!("  --help                      Show this help");
 }
 
-/// If not running as admin, re-launch ourselves elevated via UAC and exit.
-#[cfg(target_os = "windows")]
-fn ensure_admin() {
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    use windows::core::HSTRING;
 
-    // Check if already elevated.
-    if is_elevated() {
-        return;
-    }
-
-    // Re-launch with "runas" to trigger UAC prompt.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let args: String = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
-
-    unsafe {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        let result = ShellExecuteW(
-            None,
-            &HSTRING::from("runas"),
-            &HSTRING::from(exe.as_os_str()),
-            &HSTRING::from(&args),
-            None,
-            SW_SHOWNORMAL,
-        );
-        // ShellExecuteW returns >32 on success.
-        if result.0 as usize > 32 {
-            std::process::exit(0); // original (non-elevated) process exits
-        }
-        // If user declined UAC or it failed, continue without elevation.
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn is_elevated() -> bool {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-
-    unsafe {
-        let mut token = windows::Win32::Foundation::HANDLE::default();
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
-            return false;
-        }
-        let mut elevation = TOKEN_ELEVATION::default();
-        let mut size = 0u32;
-        let ok = GetTokenInformation(
-            token,
-            TokenElevation,
-            Some(&mut elevation as *mut _ as *mut _),
-            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
-            &mut size,
-        )
-        .is_ok();
-        let _ = CloseHandle(token);
-        ok && elevation.TokenIsElevated != 0
-    }
-}
-
-fn detect_browsers_or_exit() -> (Option<BrowserKind>, Option<Vec<BrowserKind>>) {
-    let found = cookies::detect_browsers("claude.ai");
-    if found.is_empty() {
-        fatal_error("No claude.ai session found in any supported browser.");
-    }
-    if found.len() == 1 {
-        let b = *found.keys().next().unwrap();
-        (Some(b), None)
-    } else {
-        let mut browsers: Vec<BrowserKind> = found.keys().copied().collect();
-        browsers.sort_by_key(|b| match b {
-            BrowserKind::Firefox => 0,
-            BrowserKind::Chrome => 1,
-            BrowserKind::Brave => 2,
-            BrowserKind::Edge => 3,
-        });
-        (None, Some(browsers))
-    }
+fn detect_browser_or_exit() -> BrowserKind {
+    cookies::detect_browser("claude.ai")
+        .unwrap_or_else(|| fatal_error("No claude.ai session found in any supported browser."))
 }
 
 fn main() {
-    // On Windows, Chrome/Edge 127+ use App-Bound Encryption (v20) which
-    // requires admin to decrypt.  Only elevate if we detect v20 cookies.
-    #[cfg(target_os = "windows")]
-    if !is_elevated() && cookies::needs_elevation("claude.ai") {
-        ensure_admin();
-    }
-
     #[cfg(target_os = "linux")]
     let use_x11 = prefer_xwayland();
 
@@ -347,8 +295,10 @@ fn main() {
                     "chrome" => BrowserKind::Chrome,
                     "brave" => BrowserKind::Brave,
                     "edge" => BrowserKind::Edge,
+                    #[cfg(target_os = "macos")]
+                    "safari" => BrowserKind::Safari,
                     other => {
-                        fatal_error(&format!("Error: unknown browser '{other}' (use firefox, chrome, brave, or edge)"));
+                        fatal_error(&format!("Error: unknown browser '{other}'"));
                     }
                 });
             }
@@ -384,7 +334,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     install_desktop_entry();
 
-    let (browser, picker_options) = if let Some(b) = browser {
+    let browser = if let Some(b) = browser {
         // Explicit --browser flag
         let cookies = cookies::read_cookies(b, "claude.ai", data_dir.as_deref());
         match cookies {
@@ -396,9 +346,9 @@ fn main() {
                 fatal_error(&format!("Error reading {b} cookies: {e}"));
             }
         }
-        (Some(b), None)
+        b
     } else {
-        detect_browsers_or_exit()
+        detect_browser_or_exit()
     };
 
     // Detach from the terminal so the shell prompt returns immediately.
@@ -425,7 +375,7 @@ fn main() {
     // find exactly its own window when multiple instances are running.
     let wm_name = format!("Claude Usage {}", std::process::id());
 
-    let app = widget::UsageApp::new(browser, data_dir, picker_options, title, title_explicit, wm_name.clone(), config);
+    let app = widget::UsageApp::new(browser, data_dir, title, title_explicit, wm_name.clone(), config);
 
     use eframe::egui;
 

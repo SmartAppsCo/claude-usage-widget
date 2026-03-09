@@ -109,9 +109,8 @@ struct SharedState {
 }
 
 pub struct UsageApp {
-    browser: Option<BrowserKind>,
+    browser: BrowserKind,
     data_dir: Option<String>,
-    picker_options: Option<Vec<BrowserKind>>,
     shared: Arc<Mutex<SharedState>>,
     cached_data: Option<Result<UsageResponse, String>>,
     last_fetch: Option<Instant>,
@@ -130,9 +129,8 @@ pub struct UsageApp {
 
 impl UsageApp {
     pub fn new(
-        browser: Option<BrowserKind>,
+        browser: BrowserKind,
         data_dir: Option<String>,
-        picker_options: Option<Vec<BrowserKind>>,
         title: String,
         title_explicit: bool,
         wm_name: String,
@@ -144,7 +142,6 @@ impl UsageApp {
         Self {
             browser,
             data_dir,
-            picker_options,
             shared: Arc::new(Mutex::new(SharedState {
                 data: None,
                 fetching: false,
@@ -166,18 +163,16 @@ impl UsageApp {
     }
 
     fn save_config(&self) {
-        Config {
-            refresh_secs: Some(self.refresh_secs),
-            always_on_top: Some(self.always_on_top),
-            all_workspaces: Some(self.all_workspaces),
-        }
-        .save();
+        // Load existing config to preserve fields we don't manage here.
+        let mut config = Config::load();
+        config.refresh_secs = Some(self.refresh_secs);
+        config.always_on_top = Some(self.always_on_top);
+        config.all_workspaces = Some(self.all_workspaces);
+        config.save();
     }
 
     fn start_fetch(&mut self) {
-        let Some(browser) = self.browser else {
-            return;
-        };
+        let browser = self.browser;
         {
             let mut s = self.shared.lock().unwrap();
             if s.fetching {
@@ -281,7 +276,7 @@ impl eframe::App for UsageApp {
         self.poll_result();
 
         // Auto-refresh
-        if self.browser.is_some() && self.picker_options.is_none() && self.should_refresh() {
+        if self.should_refresh() {
             self.start_fetch();
         }
 
@@ -411,38 +406,6 @@ impl eframe::App for UsageApp {
                                 .font(egui::FontId::new(16.0, egui::FontFamily::Name("bold".into()))),
                         );
                         ui.add_space(4.0);
-                    }
-
-                    // Picker mode
-                    if let Some(ref options) = self.picker_options.clone() {
-                        ui.label(
-                            egui::RichText::new("Session found in multiple browsers.")
-                                .color(DIM)
-                                .size(12.0),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new("Which browser to use?")
-                                .color(FG)
-                                .size(12.0),
-                        );
-                        ui.add_space(12.0);
-                        ui.horizontal(|ui| {
-                            for &b in options {
-                                let label = match b {
-                                    BrowserKind::Firefox => "Firefox",
-                                    BrowserKind::Chrome => "Chrome",
-                                    BrowserKind::Brave => "Brave",
-                                    BrowserKind::Edge => "Edge",
-                                };
-                                if ui.button(label).clicked() {
-                                    self.browser = Some(b);
-                                    self.picker_options = None;
-                                    self.start_fetch();
-                                }
-                            }
-                        });
-                        return;
                     }
 
                     // Usage display

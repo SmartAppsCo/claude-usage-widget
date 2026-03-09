@@ -10,9 +10,24 @@ Especially useful for heavy Claude Code users who burn through their allocation 
 
 ## Prerequisites
 
-- Logged into claude.ai in a supported browser (Chrome, Brave, Edge, or Firefox)
+- Logged into claude.ai in a supported browser (Firefox, Chrome, Brave, Edge, or Safari)
 
 The widget reads your session cookie to fetch usage data — no API key needed.
+
+## Platform Notes
+
+The widget auto-detects your browser and reads cookies directly. Depending on the platform and browser, you may see a one-time permission prompt:
+
+| Platform | Browser | Prompt |
+|---|---|---|
+| **macOS** | Firefox | None |
+| **macOS** | Chrome, Brave, Edge | macOS Keychain password (click "Always Allow" to avoid repeat prompts) |
+| **macOS** | Safari | Requires Full Disk Access in System Settings → Privacy & Security |
+| **Windows** | Chrome, Edge (v127+) | UAC elevation prompt (needed for App-Bound Encryption) |
+| **Windows** | Firefox, Brave | None |
+| **Linux** | All | None |
+
+Browsers are tried in order until a valid session is found. On macOS, Firefox is tried first to avoid unnecessary prompts. Use `--browser` to skip auto-detection and target a specific browser.
 
 ## Install
 
@@ -42,7 +57,8 @@ sudo apt install libgtk-3-dev libxcb-screensaver0-dev
 ## Options
 
 ```
---browser <firefox|chrome|brave|edge>   Browser to read cookies from (auto-detected if omitted)
+--browser <BROWSER>                Browser to read cookies from (auto-detected if omitted)
+                                   (firefox, chrome, brave, edge, safari*) (* macOS only)
 --data-dir <PATH>                  Custom browser data directory (requires --browser)
 --title <NAME>                     Display name shown in the widget header
 ```

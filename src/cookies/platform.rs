@@ -502,3 +502,133 @@ pub fn decrypt_chrome_value(encrypted: &[u8], key: Option<&[u8]>) -> Result<Stri
     String::from_utf8(payload.to_vec())
         .map_err(|e| CookieError::Decrypt(format!("UTF-8 decode failed: {e}")))
 }
+
+// ---------------------------------------------------------------------------
+// Windows: prompt for elevation and re-launch via UAC
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+fn is_elevated() -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = windows::Win32::Foundation::HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut _),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && elevation.TokenIsElevated != 0
+    }
+}
+
+/// Show an explanation dialog and elevate via UAC if the user agrees.
+/// Returns true if already elevated or elevation succeeded (process was
+/// re-launched — this call never returns in that case). Returns false if
+/// the user cancelled or elevation failed.
+#[cfg(target_os = "windows")]
+pub fn prompt_and_elevate_if_needed(domain: &str) -> bool {
+    if is_elevated() {
+        return true;
+    }
+    if !super::needs_elevation(domain) {
+        return true;
+    }
+
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    let msg = "Chrome and Edge use App-Bound Encryption which requires \
+               administrator access to decrypt cookies.\n\n\
+               Windows will prompt for permission next. \
+               You only need to do this once per session.";
+    let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+    let caption: Vec<u16> = "Claude Usage\0".encode_utf16().collect();
+    let result = unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(text.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_OKCANCEL | MB_ICONINFORMATION,
+        )
+    };
+    if result != IDOK {
+        return false;
+    }
+
+    // Re-launch elevated via UAC.
+    let exe = std::env::current_exe().unwrap_or_default();
+    let args: String = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        let r = ShellExecuteW(
+            None,
+            &HSTRING::from("runas"),
+            &HSTRING::from(exe.as_os_str()),
+            &HSTRING::from(&args),
+            None,
+            SW_SHOWNORMAL,
+        );
+        if r.0 as usize > 32 {
+            std::process::exit(0); // original process exits
+        }
+    }
+    false // UAC was declined or failed
+}
+
+// ---------------------------------------------------------------------------
+// macOS native dialogs (via osascript)
+// ---------------------------------------------------------------------------
+
+/// Show a native macOS dialog via osascript. Returns true if the user clicked
+/// the default (right) button, false if they clicked cancel or dismissed it.
+#[cfg(target_os = "macos")]
+fn show_macos_dialog(message: &str, buttons: (&str, &str)) -> bool {
+    let script = format!(
+        "display dialog {:?} buttons {{{:?}, {:?}}} default button {:?} with icon caution with title \"Claude Usage\"",
+        message, buttons.0, buttons.1, buttons.1
+    );
+    std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// Prompt for Safari Full Disk Access. Returns true if user wants to open settings.
+#[cfg(target_os = "macos")]
+pub fn prompt_full_disk_access() -> bool {
+    let clicked = show_macos_dialog(
+        "Claude Usage needs Full Disk Access to read Safari cookies.\n\n\
+         Go to System Settings → Privacy & Security → Full Disk Access and add this app.",
+        ("Cancel", "Open Settings"),
+    );
+    if clicked {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            .spawn();
+    }
+    clicked
+}
+
+/// Warn the user before the macOS Keychain prompt for Chrome/Brave/Edge.
+/// Returns true if user wants to continue, false to skip this browser.
+#[cfg(target_os = "macos")]
+pub fn prompt_keychain_access() -> bool {
+    show_macos_dialog(
+        "Claude Usage needs to access the Chrome/Edge/Brave keychain to decrypt cookies.\n\n\
+         macOS will prompt for your login password next. \
+         Click \"Always Allow\" so you only have to do this once.",
+        ("Cancel", "Continue"),
+    )
+}
