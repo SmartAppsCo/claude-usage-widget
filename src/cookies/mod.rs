@@ -78,12 +78,20 @@ pub fn read_cookies(
 }
 
 pub fn detect_browsers(domain: &str) -> HashMap<BrowserKind, CookieJar> {
+    let browsers = [BrowserKind::Firefox, BrowserKind::Chrome, BrowserKind::Brave];
+    let handles: Vec<_> = browsers
+        .iter()
+        .map(|&b| {
+            let domain = domain.to_owned();
+            std::thread::spawn(move || (b, read_cookies(b, &domain, None)))
+        })
+        .collect();
     let mut found = HashMap::new();
-    for browser in [BrowserKind::Firefox, BrowserKind::Chrome, BrowserKind::Brave] {
-        if let Ok(cookies) = read_cookies(browser, domain, None)
+    for handle in handles {
+        if let Ok((b, Ok(cookies))) = handle.join()
             && cookies.contains_key("sessionKey")
         {
-            found.insert(browser, cookies);
+            found.insert(b, cookies);
         }
     }
     found

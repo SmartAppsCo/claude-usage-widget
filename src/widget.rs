@@ -150,7 +150,6 @@ impl UsageApp {
 
     fn save_config(&self) {
         Config {
-            browser: self.browser.map(|b| b.to_string()),
             refresh_secs: Some(self.refresh_secs),
             always_on_top: Some(self.always_on_top),
             all_workspaces: Some(self.all_workspaces),
@@ -412,7 +411,6 @@ impl eframe::App for UsageApp {
                                 if ui.button(label).clicked() {
                                     self.browser = Some(b);
                                     self.picker_options = None;
-                                    self.save_config();
                                     self.start_fetch();
                                 }
                             }

@@ -319,16 +319,6 @@ fn main() {
             }
         }
         (Some(b), None)
-    } else if let Some(saved) = config.browser_kind() {
-        // Try saved browser from config first
-        let ok = cookies::read_cookies(saved, "claude.ai", None)
-            .is_ok_and(|c| c.contains_key("sessionKey"));
-        if ok {
-            (Some(saved), None)
-        } else {
-            // Saved browser no longer works, fall back to detection
-            detect_browsers_or_exit()
-        }
     } else {
         detect_browsers_or_exit()
     };

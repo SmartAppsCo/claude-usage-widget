@@ -2,12 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cookies::BrowserKind;
-
 #[derive(Serialize, Deserialize, Default)]
 pub struct Config {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub browser: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,14 +30,6 @@ impl Config {
         }
     }
 
-    pub fn browser_kind(&self) -> Option<BrowserKind> {
-        match self.browser.as_deref() {
-            Some("firefox") => Some(BrowserKind::Firefox),
-            Some("chrome") => Some(BrowserKind::Chrome),
-            Some("brave") => Some(BrowserKind::Brave),
-            _ => None,
-        }
-    }
 }
 
 fn config_path() -> Option<PathBuf> {
