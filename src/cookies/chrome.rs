@@ -4,36 +4,6 @@ use std::path::PathBuf;
 use crate::cookies::platform::{chrome_encryption_key, decrypt_chrome_value};
 use crate::cookies::{CookieError, CookieJar};
 
-/// Check if any cookie DB from `default_dirs` contains v20-encrypted cookies
-/// for the given domain.  Does not decrypt anything.
-#[cfg(windows)]
-pub fn has_v20_cookies(domain: &str, default_dirs: fn() -> Vec<PathBuf>) -> bool {
-    let db_path = match find_cookie_db(None, default_dirs) {
-        Some(p) => p,
-        None => return false,
-    };
-    let conn = match super::open_db(&db_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let mut stmt = match conn.prepare(
-        "SELECT encrypted_value FROM cookies WHERE host_key LIKE ?1 LIMIT 1",
-    ) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let pattern = format!("%{domain}%");
-    let Ok(mut rows) = stmt.query([&pattern]) else {
-        return false;
-    };
-    if let Ok(Some(row)) = rows.next() {
-        if let Ok(val) = row.get::<_, Vec<u8>>(0) {
-            return val.len() >= 3 && &val[..3] == b"v20";
-        }
-    }
-    false
-}
-
 fn find_cookie_db(data_dir: Option<&str>, default_dirs: fn() -> Vec<PathBuf>) -> Option<PathBuf> {
     let base_dirs: Vec<PathBuf> = match data_dir {
         Some(d) => vec![PathBuf::from(d)],

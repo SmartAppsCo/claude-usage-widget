@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.5.1] - 2026-03-09
+
+### Fixed
+
+- Windows: cookie database reads broken by exclusive file locks (restored Restart Manager with deferred UAC elevation)
+
+
 ## [0.5.0] - 2026-03-09
 
 ### Added

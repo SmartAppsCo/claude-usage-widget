@@ -10,22 +10,92 @@ use std::path::Path;
 
 pub type CookieJar = HashMap<String, String>;
 
-/// Open a SQLite database in immutable mode, bypassing all file locking.
-/// We never write to cookie databases, so this is safe and avoids conflicts
-/// with browsers holding WAL or exclusive locks.
+/// Open a SQLite database read-only.
+///
+/// On Unix we use `immutable=1` URI mode to bypass WAL/file locks (browsers
+/// like Firefox hold WAL locks that block normal readers).
+///
+/// On Windows, browsers hold mandatory exclusive file locks.  If the initial
+/// open fails we use the Restart Manager API to briefly release the lock,
+/// then retry.  The browser subprocess that held the lock restarts automatically.
 pub(crate) fn open_db(db_path: &Path) -> Result<rusqlite::Connection, CookieError> {
     use rusqlite::{Connection, OpenFlags};
 
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX
-        | OpenFlags::SQLITE_OPEN_URI;
-    let encoded = db_path.display().to_string()
-        .replace('%', "%25")
-        .replace(' ', "%20")
-        .replace('?', "%3F")
-        .replace('#', "%23");
-    let uri = format!("file:{encoded}?immutable=1");
-    Connection::open_with_flags(uri, flags).map_err(CookieError::Sqlite)
+    #[cfg(not(windows))]
+    {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI;
+        let encoded = db_path.display().to_string()
+            .replace('%', "%25")
+            .replace(' ', "%20")
+            .replace('?', "%3F")
+            .replace('#', "%23");
+        let uri = format!("file:{encoded}?immutable=1");
+        Connection::open_with_flags(uri, flags).map_err(CookieError::Sqlite)
+    }
+
+    #[cfg(windows)]
+    {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        match Connection::open_with_flags(db_path, flags) {
+            Ok(conn) => Ok(conn),
+            Err(_) => {
+                release_file_lock(db_path);
+                Connection::open_with_flags(db_path, flags).map_err(CookieError::Sqlite)
+            }
+        }
+    }
+}
+
+/// Use the Windows Restart Manager API to release a file lock held by another
+/// process (e.g. Chrome/Edge holding the Cookies database).  The browser
+/// subprocess that held the lock restarts automatically.
+#[cfg(windows)]
+fn release_file_lock(path: &Path) {
+    use windows::core::{HSTRING, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows::Win32::System::RestartManager::*;
+
+    unsafe {
+        let file_path = HSTRING::from(path.as_os_str());
+        let mut session: u32 = 0;
+        let mut session_key_buf = [0u16; (CCH_RM_SESSION_KEY as usize) + 1];
+        let session_key = PWSTR(session_key_buf.as_mut_ptr());
+
+        if RmStartSession(&mut session, None, session_key) != ERROR_SUCCESS {
+            return;
+        }
+
+        if RmRegisterResources(
+            session,
+            Some(&[PCWSTR(file_path.as_ptr())]),
+            None,
+            None,
+        ) != ERROR_SUCCESS
+        {
+            let _ = RmEndSession(session);
+            return;
+        }
+
+        let mut needed: u32 = 0;
+        let mut info = [RM_PROCESS_INFO::default()];
+        let mut reasons: u32 = 0;
+        let mut count: u32 = 0;
+        let result = RmGetList(
+            session,
+            &mut needed,
+            &mut count,
+            Some(info.as_mut_ptr()),
+            &mut reasons,
+        );
+
+        if (result == ERROR_SUCCESS || result == ERROR_MORE_DATA) && needed > 0 {
+            let _ = RmShutdown(session, RmForceShutdown.0 as u32, None);
+        }
+
+        let _ = RmEndSession(session);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,24 +142,6 @@ impl fmt::Display for CookieError {
             CookieError::Decrypt(e) => write!(f, "Decrypt error: {e}"),
         }
     }
-}
-
-/// Check whether any Chromium browser has v20-encrypted cookies for the
-/// given domain.  This is a lightweight check that opens the DB and peeks at
-/// the raw `encrypted_value` prefix without decrypting anything.
-#[cfg(windows)]
-pub fn needs_elevation(domain: &str) -> bool {
-    let dirs: Vec<fn() -> Vec<std::path::PathBuf>> = vec![
-        platform::chrome_default_dirs,
-        platform::brave_default_dirs,
-        platform::edge_default_dirs,
-    ];
-    for dir_fn in dirs {
-        if chrome::has_v20_cookies(domain, dir_fn) {
-            return true;
-        }
-    }
-    false
 }
 
 pub fn read_cookies(
@@ -173,12 +225,12 @@ pub fn detect_browser(domain: &str) -> Option<BrowserKind> {
             }
         }
 
-        // On Windows, prompt for elevation before trying Chromium browsers
-        // (only if v20 App-Bound Encryption is detected).
+        // On Windows, elevate before trying Chromium browsers — the Restart
+        // Manager needs admin to release the exclusive cookie DB lock.
         #[cfg(target_os = "windows")]
         if !prompted_elevation && is_chromium {
             prompted_elevation = true;
-            if !platform::prompt_and_elevate_if_needed(domain) {
+            if !platform::elevate_if_needed() {
                 return None; // user cancelled
             }
         }

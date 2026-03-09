@@ -335,7 +335,15 @@ fn main() {
     install_desktop_entry();
 
     let browser = if let Some(b) = browser {
-        // Explicit --browser flag
+        // Explicit --browser flag — on Windows, elevate for Chromium browsers
+        // so the Restart Manager can release the cookie DB lock.
+        #[cfg(target_os = "windows")]
+        if matches!(b, BrowserKind::Chrome | BrowserKind::Brave | BrowserKind::Edge) {
+            if !cookies::platform::elevate_if_needed() {
+                std::process::exit(0);
+            }
+        }
+
         let cookies = cookies::read_cookies(b, "claude.ai", data_dir.as_deref());
         match cookies {
             Ok(ref c) if c.contains_key("sessionKey") => {}

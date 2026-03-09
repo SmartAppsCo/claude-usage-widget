@@ -533,26 +533,25 @@ fn is_elevated() -> bool {
     }
 }
 
-/// Show an explanation dialog and elevate via UAC if the user agrees.
-/// Returns true if already elevated or elevation succeeded (process was
-/// re-launched — this call never returns in that case). Returns false if
-/// the user cancelled or elevation failed.
+/// Elevate to admin if not already elevated.  Needed on Windows because
+/// Chrome/Edge hold exclusive locks on cookie databases — the Restart Manager
+/// requires admin privileges to release them.
+///
+/// Returns true if already elevated.  If not, shows an explanation dialog,
+/// re-launches via UAC, and exits the current process (never returns).
+/// Returns false only if the user cancels.
 #[cfg(target_os = "windows")]
-pub fn prompt_and_elevate_if_needed(domain: &str) -> bool {
+pub fn elevate_if_needed() -> bool {
     if is_elevated() {
-        return true;
-    }
-    if !super::needs_elevation(domain) {
         return true;
     }
 
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
-    let msg = "Chrome and Edge use App-Bound Encryption which requires \
-               administrator access to decrypt cookies.\n\n\
-               Windows will prompt for permission next. \
-               You only need to do this once per session.";
+    let msg = "Chrome and Edge lock their cookie databases. \
+               Claude Usage needs administrator access to read them.\n\n\
+               Windows will prompt for permission next.";
     let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
     let caption: Vec<u16> = "Claude Usage\0".encode_utf16().collect();
     let result = unsafe {
