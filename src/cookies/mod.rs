@@ -151,11 +151,24 @@ pub fn detect_browser(domain: &str) -> Option<BrowserKind> {
                 }
                 continue;
             }
-            // Show keychain dialog once before the first Chromium browser.
+            // Show keychain explanation once before the first Chromium browser,
+            // but skip if we already prompted from this same binary path
+            // (macOS ties "Always Allow" to the binary, so same path = safe).
             if !prompted_keychain && is_chromium {
                 prompted_keychain = true;
-                if !platform::prompt_keychain_access() {
-                    return None; // user cancelled
+                let exe_path = std::env::current_exe().ok()
+                    .and_then(|p| p.to_str().map(String::from));
+                let config = crate::config::Config::load();
+                let already_prompted = exe_path.is_some()
+                    && config.chromium_prompted_exe.as_ref() == exe_path.as_ref();
+                if !already_prompted {
+                    if !platform::prompt_keychain_access() {
+                        return None; // user cancelled
+                    }
+                    // Save that we prompted from this exe path.
+                    let mut config = crate::config::Config::load();
+                    config.chromium_prompted_exe = exe_path;
+                    config.save();
                 }
             }
         }

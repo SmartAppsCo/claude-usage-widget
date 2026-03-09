@@ -10,6 +10,11 @@ pub struct Config {
     pub always_on_top: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub all_workspaces: Option<bool>,
+    /// Exe path that last showed the Chromium permission explanation dialog.
+    /// Stored so we don't re-show the dialog on subsequent launches from the
+    /// same binary (macOS ties "Always Allow" to the binary path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chromium_prompted_exe: Option<String>,
 }
 
 impl Config {
