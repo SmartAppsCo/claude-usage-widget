@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 
+## [0.4.0] - 2026-03-09
+
+### Added
+
+- Windows v20 App-Bound Encryption support (Chrome/Edge 127+) via SYSTEM impersonation and double-DPAPI decryption
+- Automatic UAC self-elevation when v20-encrypted cookies are detected (no manual "Run as Administrator" needed)
+- Windows Restart Manager integration to release file locks held by Chrome/Edge on the cookie database
+
+### Changed
+
+- Cookie databases are now opened read-only instead of being copied to a temp file
+- Removed `tempfile` dependency
+
+### Fixed
+
+- Windows path separator issues causing cookie database lookups to fail
+- Right-click context menu white-on-white text on Windows (now uses explicit dark background)
+
+
 ## [0.3.1] - 2026-03-09
 
 ### Added

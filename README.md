@@ -30,7 +30,7 @@ Extract the archive and place the `claude-usage` binary somewhere in your `PATH`
 Alternatively, build from source with [Cargo](https://rustup.rs/):
 
 ```
-cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.3.1
+cargo install --git https://github.com/SmartAppsCo/claude-usage-widget.git --tag v0.4.0
 ```
 
 On Linux, building from source requires these system packages:
